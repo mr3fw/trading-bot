@@ -3,9 +3,12 @@ import asyncio
 import time
 import json
 import os
+import nest_asyncio
 from datetime import datetime
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-import os
+
+nest_asyncio.apply()
+
 TOKEN   = os.environ.get("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
@@ -16,7 +19,7 @@ COOLDOWN      = 1800
 LOG_FILE      = "signals_log.json"
 TARGET_PCT    = 1.5
 STOP_PCT      = 0.75
-TIMEOUT_MINS  = 120   # ساعتان بدل ساعة
+TIMEOUT_MINS  = 120
 
 last_signals = {}
 
@@ -51,7 +54,7 @@ def log_signal(signal):
     save_log(log)
     return entry
 
-# ─── التقييم التلقائي (شمعة بشمعة) ───────────────────────
+# ─── التقييم التلقائي ──────────────────────────────────────
 
 async def evaluate_pending(bot):
     log     = load_log()
@@ -74,7 +77,6 @@ async def evaluate_pending(bot):
             if df is None or df.empty:
                 continue
 
-            # ✅ نقطة الدخول الزمنية — نتجاهل الشموع قبل الإشارة
             entry_time = datetime.fromtimestamp(entry_ts)
             df.index   = df.index.tz_localize(None) if df.index.tzinfo else df.index
             df_after   = df[df.index >= entry_time]
@@ -85,7 +87,6 @@ async def evaluate_pending(bot):
             result     = None
             exit_price = None
 
-            # ✅ محاكاة شمعة بشمعة — بدون lookahead bias
             for i in range(len(df_after)):
                 candle_high = df_after["High"].iloc[i]
                 candle_low  = df_after["Low"].iloc[i]
@@ -99,13 +100,12 @@ async def evaluate_pending(bot):
                     exit_price = stop
                     break
 
-            # timeout بعد ساعتين
             if result is None:
                 if elapsed_min >= TIMEOUT_MINS:
                     result     = "timeout"
                     exit_price = round(df_after["Close"].iloc[-1], 2)
                 else:
-                    continue  # لا زالت مفتوحة
+                    continue
 
             pnl = round((exit_price - entry_price) / entry_price * 100, 2)
 
@@ -195,7 +195,7 @@ def build_message(s, bullish):
         f"⏱ تقييم تلقائي — شمعة بشمعة"
     )
 
-# ─── الإحصاء ──────────────────────────────────────────────
+# ─── الأوامر ──────────────────────────────────────────────
 
 async def cmd_stats(update, context: ContextTypes.DEFAULT_TYPE):
     log  = load_log()
@@ -211,7 +211,6 @@ async def cmd_stats(update, context: ContextTypes.DEFAULT_TYPE):
     win_rate = round(len(wins) / len(done) * 100, 1)
     avg_pnl  = round(sum(e["pnl_pct"] for e in done) / len(done), 2)
 
-    # حساب أقصى سلسلة خسائر متتالية
     max_loss_streak = streak = 0
     for e in done:
         if e["result"] == "loss":
@@ -243,6 +242,20 @@ async def cmd_pending(update, context: ContextTypes.DEFAULT_TYPE):
         lines.append(f"• {e['symbol']} @ ${e['entry_price']} — {e['time']}")
     await update.message.reply_text("\n".join(lines))
 
+async def start(update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "البوت يعمل ✅\n\n"
+        "/scan    — فحص فوري\n"
+        "/pending — إشارات مفتوحة\n"
+        "/stats   — تحليل الأداء"
+    )
+
+async def manual_scan(update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🔍 جاري الفحص...")
+    await scan(context.bot)
+    await evaluate_pending(context.bot)
+    await update.message.reply_text("✅ انتهى")
+
 # ─── الجدولة ──────────────────────────────────────────────
 
 async def scan(bot):
@@ -259,22 +272,6 @@ async def run_scheduler(bot):
         await scan(bot)
         await evaluate_pending(bot)
         await asyncio.sleep(300)
-
-# ─── الأوامر ──────────────────────────────────────────────
-
-async def start(update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "البوت يعمل ✅\n\n"
-        "/scan    — فحص فوري\n"
-        "/pending — إشارات مفتوحة\n"
-        "/stats   — تحليل الأداء"
-    )
-
-async def manual_scan(update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔍 جاري الفحص...")
-    await scan(context.bot)
-    await evaluate_pending(context.bot)
-    await update.message.reply_text("✅ انتهى")
 
 async def post_init(app):
     asyncio.create_task(run_scheduler(app.bot))
