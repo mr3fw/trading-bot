@@ -6,8 +6,8 @@ import os
 from datetime import datetime
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 import os
-TOKEN = os.environ.get("7699448302:AAFn54m6G-AeL8_KsqufEqdkOQqWSRAOX90")
-CHAT_ID = os.environ.get("8242776558")
+TOKEN   = os.environ.get("TELEGRAM_BOT_TOKEN")
+CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 WATCHLIST     = ["AAPL", "NVDA", "TSLA", "MSFT", "AMD", "META"]
 LOOKBACK      = 20
