@@ -12,7 +12,6 @@ nest_asyncio.apply()
 TOKEN   = os.environ.get("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-# S&P 500 كامل
 WATCHLIST = [
     "AAPL","MSFT","NVDA","AMZN","GOOGL","META","TSLA","BRK-B","AVGO","JPM",
     "LLY","UNH","XOM","V","MA","COST","HD","PG","ABBV","MRK","CVX","NFLX",
@@ -24,32 +23,18 @@ WATCHLIST = [
     "GD","NSC","FDX","EMR","MCO","PSA","F","GM","SHW","EOG","SLB","OXY",
     "KMB","CCI","WM","CARR","OTIS","CTAS","PAYX","ADP","MSCI","ICE","NXPI",
     "KLAC","LRCX","AMAT","MCHP","ADI","SNPS","CDNS","ANSS","PH","ROK","AME",
-    "FTV","IDXX","ILMN","BIIB","MRNA","DXCM","ALGN","HOLX","BAX","BSX","EW",
-    "HSIC","RMD","COO","VAR","XRAY","PODD","TFX","STE","ABMD","INCY","TECH",
-    "VTRS","CTLT","PKI","DGX","LH","MTD","WAT","A","BIO","IQV","CRL","WST",
-    "EPAM","OKTA","ZS","CRWD","DDOG","NET","SNOW","MDB","TEAM","HUBS","COUP",
-    "BILL","FIVN","PCTY","PAYC","RNG","SMAR","APPN","ESTC","SUMO","PING",
+    "FTV","IDXX","ILMN","BIIB","MRNA","DXCM","ALGN","BSX","EW","RMD","BAX",
     "AMD","INTC","MU","WDC","STX","NTAP","HPQ","HPE","DELL","PSTG","NTNX",
-    "UBER","LYFT","ABNB","DASH","RBLX","U","HOOD","COIN","SQ","PYPL","AFRM",
-    "SOFI","LC","UPST","OPEN","OFFERPAD","OPENDOOR","Z","ZILLOW","REDFIN",
-    "W","ETSY","CHWY","CHEWY","BARK","PETS","WOOF","FRPT","HRMY","RXRX",
-    "XNCR","PRAX","ARWR","BEAM","EDIT","NTLA","CRSP","FATE","BLUE","SGEN",
-    "RCUS","IMVT","KRTX","PTGX","ACAD","SAGE","AXSM","INVA","PTCT","SRPT",
-    "FOLD","RARE","AGEN","ADMA","ACHC","ENSG","AMED","AMEDISYS","LHCG",
-    "PDCO","HSIC","PRGO","PBH","PRESTIGE","ENR","SPB","SPECTRUM","CHD",
-    "CLOROX","CLX","CENT","CENTRAL","REYN","REYNOLDS","BRBR","BELLRING",
-    "SMPL","SIMPLY","NOMD","NOMAD","TWNK","HOSTESS","NWSA","FOX","FOXA",
-    "DIS","PARA","WBD","NFLX","LGF-A","AMC","CNK","IMAX","MDC","LEN","PHM",
-    "TOL","NVR","DHI","KBH","MHO","SMITH","LGIH","SKY","CAVCO","PATK",
-    "BECN","BLDR","IBP","TREX","AZEK","FBHS","MAS","OC","AWI","TILE",
-    "LPX","UFPI","UFP","WEST","DOOR","JELD","PGTI","WMS","APOG","CSWC",
-    "MAIN","GAIN","GLAD","HTGC","ARCC","PSEC","SLRC","NMFC","TPVG","GSBD",
-    "BBDC","TCPC","KCAP","TICC","OXSQ","PFLT","PNNT","TRIN","CSWC","WHF",
-    "HRZN","GECC","MRCC","BCSF","BKCC","CGBD","FDUS","GBDC","KCAP","NEWT",
-    "ORCC","RWAY","SCM","SLRC","SSSS","TPVG","TRIN","CGBD","FCRD","FDUS"
+    "UBER","LYFT","ABNB","DASH","RBLX","HOOD","COIN","SQ","PYPL","AFRM","SOFI",
+    "NET","SNOW","MDB","TEAM","HUBS","CRWD","DDOG","ZS","OKTA","BILL","PCTY",
+    "PAYC","ESTC","APPN","COUP","FIVN","RNG","SMAR","PING","SUMO",
+    "DIS","PARA","WBD","LGF-A","AMC","CNK","IMAX","NWSA","FOX","FOXA",
+    "LEN","PHM","TOL","NVR","DHI","KBH","MHO","LGIH","SKY","CAVCO",
+    "BECN","BLDR","IBP","TREX","AZEK","FBHS","MAS","OC","AWI","LPX",
+    "ARCC","MAIN","HTGC","PSEC","NMFC","TPVG","GSBD","BBDC","TCPC",
+    "ORCC","HRZN","BCSF","GBDC","NEWT","FDUS","SCM","WHF","PFLT","PNNT"
 ]
 
-# إزالة المكررات
 WATCHLIST = list(dict.fromkeys(WATCHLIST))
 
 LOOKBACK      = 20
@@ -59,7 +44,10 @@ LOG_FILE      = "signals_log.json"
 TARGET_PCT    = 1.5
 STOP_PCT      = 0.75
 TIMEOUT_MINS  = 120
-SCAN_BATCH    = 50  # عدد الأسهم في كل دفعة
+SCAN_BATCH    = 50
+MIN_PRICE     = 5.0        # فلتر السعر
+MIN_VOLUME    = 1_000_000  # فلتر الحجم اليومي
+MAX_RSI       = 75         # فلتر RSI
 
 last_signals = {}
 
@@ -83,6 +71,7 @@ def log_signal(signal):
         "symbol":       signal["symbol"],
         "entry_price":  signal["price"],
         "volume_ratio": signal["volume_ratio"],
+        "rsi":          signal["rsi"],
         "target":       round(signal["price"] * (1 + TARGET_PCT / 100), 2),
         "stop":         round(signal["price"] * (1 - STOP_PCT  / 100), 2),
         "result":       "pending",
@@ -93,6 +82,15 @@ def log_signal(signal):
     log.append(entry)
     save_log(log)
     return entry
+
+# ─── حساب RSI ─────────────────────────────────────────────
+
+def calc_rsi(series, period=14):
+    delta = series.diff()
+    gain  = delta.clip(lower=0).rolling(period).mean()
+    loss  = (-delta.clip(upper=0)).rolling(period).mean()
+    rs    = gain / loss
+    return 100 - (100 / (1 + rs))
 
 # ─── التقييم التلقائي ──────────────────────────────────────
 
@@ -128,14 +126,11 @@ async def evaluate_pending(bot):
             exit_price = None
 
             for i in range(len(df_after)):
-                candle_high = df_after["High"].iloc[i]
-                candle_low  = df_after["Low"].iloc[i]
-
-                if candle_high >= target:
+                if df_after["High"].iloc[i] >= target:
                     result     = "win"
                     exit_price = target
                     break
-                elif candle_low <= stop:
+                elif df_after["Low"].iloc[i] <= stop:
                     result     = "loss"
                     exit_price = stop
                     break
@@ -148,7 +143,6 @@ async def evaluate_pending(bot):
                     continue
 
             pnl = round((exit_price - entry_price) / entry_price * 100, 2)
-
             entry["result"]     = result
             entry["exit_price"] = exit_price
             entry["pnl_pct"]    = pnl
@@ -191,12 +185,30 @@ def check_signal(symbol):
         if df is None or df.empty or len(df) < LOOKBACK + 1:
             return None
 
-        df["EMA20"]    = df["Close"].ewm(span=20).mean()
         current_close  = df["Close"].iloc[-1]
         current_volume = df["Volume"].iloc[-1]
-        prev           = df.iloc[-(LOOKBACK + 1):-1]
-        highest        = prev["High"].max()
-        avg_vol        = prev["Volume"].mean()
+
+        # فلتر السعر
+        if current_close < MIN_PRICE:
+            return None
+
+        # فلتر الحجم اليومي
+        daily = yf.Ticker(symbol).history(period="5d", interval="1d")
+        if daily.empty or daily["Volume"].mean() < MIN_VOLUME:
+            return None
+
+        # حساب RSI
+        rsi_series = calc_rsi(df["Close"])
+        rsi        = round(rsi_series.iloc[-1], 1)
+
+        # فلتر RSI
+        if rsi > MAX_RSI:
+            return None
+
+        df["EMA20"] = df["Close"].ewm(span=20).mean()
+        prev        = df.iloc[-(LOOKBACK + 1):-1]
+        highest     = prev["High"].max()
+        avg_vol     = prev["Volume"].mean()
 
         if avg_vol == 0:
             return None
@@ -210,6 +222,7 @@ def check_signal(symbol):
                 "symbol":       symbol,
                 "price":        round(current_close, 2),
                 "volume_ratio": round(current_volume / avg_vol, 1),
+                "rsi":          rsi,
             }
     except Exception as e:
         print(f"خطأ في {symbol}: {e}")
@@ -225,12 +238,14 @@ def build_message(s, bullish):
         f"🚨 إشارة شراء محتملة\n\n"
         f"السهم:  {s['symbol']}\n"
         f"السعر:  ${s['price']}\n"
+        f"RSI:    {s['rsi']}\n"
         f"🎯 الهدف: ${target} (+{TARGET_PCT}%)\n"
         f"🛑 الوقف: ${stop} (-{STOP_PCT}%)\n"
         f"الحجم:  {s['volume_ratio']}x المتوسط\n\n"
         f"✅ كسر أعلى مستوى\n"
         f"✅ حجم مرتفع\n"
         f"✅ فوق EMA20\n"
+        f"✅ RSI مقبول ({s['rsi']} < {MAX_RSI})\n"
         f"{market}\n\n"
         f"⏱ تقييم تلقائي — شمعة بشمعة"
     )
@@ -285,7 +300,10 @@ async def cmd_pending(update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_watchlist(update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"📋 قائمة المراقبة\n\n"
-        f"عدد الأسهم: {len(WATCHLIST)}\n\n"
+        f"عدد الأسهم: {len(WATCHLIST)}\n"
+        f"فلتر السعر: أكثر من ${MIN_PRICE}\n"
+        f"فلتر الحجم: أكثر من {MIN_VOLUME:,} سهم/يوم\n"
+        f"فلتر RSI:   أقل من {MAX_RSI}\n\n"
         f"أول 20 سهم:\n" +
         "\n".join(f"• {s}" for s in WATCHLIST[:20]) +
         f"\n\n... و {len(WATCHLIST)-20} سهم آخر"
@@ -294,7 +312,10 @@ async def cmd_watchlist(update, context: ContextTypes.DEFAULT_TYPE):
 async def start(update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"البوت يعمل ✅\n\n"
-        f"يراقب {len(WATCHLIST)} سهم\n\n"
+        f"يراقب {len(WATCHLIST)} سهم\n"
+        f"فلتر السعر: >${MIN_PRICE}\n"
+        f"فلتر الحجم: >{MIN_VOLUME:,}/يوم\n"
+        f"فلتر RSI: <{MAX_RSI}\n\n"
         f"/scan      — فحص فوري\n"
         f"/pending   — إشارات مفتوحة\n"
         f"/stats     — تحليل الأداء\n"
@@ -312,8 +333,6 @@ async def manual_scan(update, context: ContextTypes.DEFAULT_TYPE):
 async def scan(bot):
     print(f"🔍 فحص {len(WATCHLIST)} سهم...")
     bullish = market_is_bullish()
-
-    # مسح على دفعات لتفادي الحظر
     for i in range(0, len(WATCHLIST), SCAN_BATCH):
         batch = WATCHLIST[i:i+SCAN_BATCH]
         for symbol in batch:
@@ -321,7 +340,7 @@ async def scan(bot):
             if signal:
                 log_signal(signal)
                 await bot.send_message(chat_id=CHAT_ID, text=build_message(signal, bullish))
-        await asyncio.sleep(2)  # استراحة بين الدفعات
+        await asyncio.sleep(2)
 
 async def run_scheduler(bot):
     while True:
