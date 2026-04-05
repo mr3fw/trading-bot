@@ -5,9 +5,9 @@ import json
 import os
 from datetime import datetime
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-
-TOKEN = "PUT_YOUR_TOKEN_HERE"
-CHAT_ID = "PUT_YOUR_CHAT_ID_HERE"
+import os
+TOKEN = os.environ.get("7699448302:AAFn54m6G-AeL8_KsqufEqdkOQqWSRAOX90")
+CHAT_ID = os.environ.get("8242776558")
 
 WATCHLIST     = ["AAPL", "NVDA", "TSLA", "MSFT", "AMD", "META"]
 LOOKBACK      = 20
