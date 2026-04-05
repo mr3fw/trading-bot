@@ -12,7 +12,46 @@ nest_asyncio.apply()
 TOKEN   = os.environ.get("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-WATCHLIST     = ["AAPL", "NVDA", "TSLA", "MSFT", "AMD", "META"]
+# S&P 500 كامل
+WATCHLIST = [
+    "AAPL","MSFT","NVDA","AMZN","GOOGL","META","TSLA","BRK-B","AVGO","JPM",
+    "LLY","UNH","XOM","V","MA","COST","HD","PG","ABBV","MRK","CVX","NFLX",
+    "CRM","BAC","KO","PEP","TMO","ACN","MCD","CSCO","ABT","ADBE","WMT","TXN",
+    "PM","NKE","DHR","NEE","ORCL","RTX","HON","AMGN","LOW","UPS","QCOM","IBM",
+    "CAT","GS","INTU","SPGI","BLK","ISRG","ELV","MDT","AXP","T","DE","GILD",
+    "NOW","SYK","MMC","VRTX","ZTS","BMY","C","MO","CL","DUK","SO","PLD","AMT",
+    "CI","CB","AON","TJX","USB","PNC","REGN","HUM","ITW","CME","ETN","APD",
+    "GD","NSC","FDX","EMR","MCO","PSA","F","GM","SHW","EOG","SLB","OXY",
+    "KMB","CCI","WM","CARR","OTIS","CTAS","PAYX","ADP","MSCI","ICE","NXPI",
+    "KLAC","LRCX","AMAT","MCHP","ADI","SNPS","CDNS","ANSS","PH","ROK","AME",
+    "FTV","IDXX","ILMN","BIIB","MRNA","DXCM","ALGN","HOLX","BAX","BSX","EW",
+    "HSIC","RMD","COO","VAR","XRAY","PODD","TFX","STE","ABMD","INCY","TECH",
+    "VTRS","CTLT","PKI","DGX","LH","MTD","WAT","A","BIO","IQV","CRL","WST",
+    "EPAM","OKTA","ZS","CRWD","DDOG","NET","SNOW","MDB","TEAM","HUBS","COUP",
+    "BILL","FIVN","PCTY","PAYC","RNG","SMAR","APPN","ESTC","SUMO","PING",
+    "AMD","INTC","MU","WDC","STX","NTAP","HPQ","HPE","DELL","PSTG","NTNX",
+    "UBER","LYFT","ABNB","DASH","RBLX","U","HOOD","COIN","SQ","PYPL","AFRM",
+    "SOFI","LC","UPST","OPEN","OFFERPAD","OPENDOOR","Z","ZILLOW","REDFIN",
+    "W","ETSY","CHWY","CHEWY","BARK","PETS","WOOF","FRPT","HRMY","RXRX",
+    "XNCR","PRAX","ARWR","BEAM","EDIT","NTLA","CRSP","FATE","BLUE","SGEN",
+    "RCUS","IMVT","KRTX","PTGX","ACAD","SAGE","AXSM","INVA","PTCT","SRPT",
+    "FOLD","RARE","AGEN","ADMA","ACHC","ENSG","AMED","AMEDISYS","LHCG",
+    "PDCO","HSIC","PRGO","PBH","PRESTIGE","ENR","SPB","SPECTRUM","CHD",
+    "CLOROX","CLX","CENT","CENTRAL","REYN","REYNOLDS","BRBR","BELLRING",
+    "SMPL","SIMPLY","NOMD","NOMAD","TWNK","HOSTESS","NWSA","FOX","FOXA",
+    "DIS","PARA","WBD","NFLX","LGF-A","AMC","CNK","IMAX","MDC","LEN","PHM",
+    "TOL","NVR","DHI","KBH","MHO","SMITH","LGIH","SKY","CAVCO","PATK",
+    "BECN","BLDR","IBP","TREX","AZEK","FBHS","MAS","OC","AWI","TILE",
+    "LPX","UFPI","UFP","WEST","DOOR","JELD","PGTI","WMS","APOG","CSWC",
+    "MAIN","GAIN","GLAD","HTGC","ARCC","PSEC","SLRC","NMFC","TPVG","GSBD",
+    "BBDC","TCPC","KCAP","TICC","OXSQ","PFLT","PNNT","TRIN","CSWC","WHF",
+    "HRZN","GECC","MRCC","BCSF","BKCC","CGBD","FDUS","GBDC","KCAP","NEWT",
+    "ORCC","RWAY","SCM","SLRC","SSSS","TPVG","TRIN","CGBD","FCRD","FDUS"
+]
+
+# إزالة المكررات
+WATCHLIST = list(dict.fromkeys(WATCHLIST))
+
 LOOKBACK      = 20
 VOLUME_MULT   = 1.5
 COOLDOWN      = 1800
@@ -20,6 +59,7 @@ LOG_FILE      = "signals_log.json"
 TARGET_PCT    = 1.5
 STOP_PCT      = 0.75
 TIMEOUT_MINS  = 120
+SCAN_BATCH    = 50  # عدد الأسهم في كل دفعة
 
 last_signals = {}
 
@@ -242,30 +282,46 @@ async def cmd_pending(update, context: ContextTypes.DEFAULT_TYPE):
         lines.append(f"• {e['symbol']} @ ${e['entry_price']} — {e['time']}")
     await update.message.reply_text("\n".join(lines))
 
+async def cmd_watchlist(update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        f"📋 قائمة المراقبة\n\n"
+        f"عدد الأسهم: {len(WATCHLIST)}\n\n"
+        f"أول 20 سهم:\n" +
+        "\n".join(f"• {s}" for s in WATCHLIST[:20]) +
+        f"\n\n... و {len(WATCHLIST)-20} سهم آخر"
+    )
+
 async def start(update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "البوت يعمل ✅\n\n"
-        "/scan    — فحص فوري\n"
-        "/pending — إشارات مفتوحة\n"
-        "/stats   — تحليل الأداء"
+        f"البوت يعمل ✅\n\n"
+        f"يراقب {len(WATCHLIST)} سهم\n\n"
+        f"/scan      — فحص فوري\n"
+        f"/pending   — إشارات مفتوحة\n"
+        f"/stats     — تحليل الأداء\n"
+        f"/watchlist — قائمة الأسهم"
     )
 
 async def manual_scan(update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔍 جاري الفحص...")
+    await update.message.reply_text(f"🔍 جاري فحص {len(WATCHLIST)} سهم...")
     await scan(context.bot)
     await evaluate_pending(context.bot)
-    await update.message.reply_text("✅ انتهى")
+    await update.message.reply_text("✅ انتهى الفحص")
 
 # ─── الجدولة ──────────────────────────────────────────────
 
 async def scan(bot):
-    print("🔍 فحص...")
+    print(f"🔍 فحص {len(WATCHLIST)} سهم...")
     bullish = market_is_bullish()
-    for symbol in WATCHLIST:
-        signal = check_signal(symbol)
-        if signal:
-            log_signal(signal)
-            await bot.send_message(chat_id=CHAT_ID, text=build_message(signal, bullish))
+
+    # مسح على دفعات لتفادي الحظر
+    for i in range(0, len(WATCHLIST), SCAN_BATCH):
+        batch = WATCHLIST[i:i+SCAN_BATCH]
+        for symbol in batch:
+            signal = check_signal(symbol)
+            if signal:
+                log_signal(signal)
+                await bot.send_message(chat_id=CHAT_ID, text=build_message(signal, bullish))
+        await asyncio.sleep(2)  # استراحة بين الدفعات
 
 async def run_scheduler(bot):
     while True:
@@ -279,10 +335,11 @@ async def post_init(app):
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
     app.post_init = post_init
-    app.add_handler(CommandHandler("start",   start))
-    app.add_handler(CommandHandler("scan",    manual_scan))
-    app.add_handler(CommandHandler("stats",   cmd_stats))
-    app.add_handler(CommandHandler("pending", cmd_pending))
+    app.add_handler(CommandHandler("start",     start))
+    app.add_handler(CommandHandler("scan",      manual_scan))
+    app.add_handler(CommandHandler("stats",     cmd_stats))
+    app.add_handler(CommandHandler("pending",   cmd_pending))
+    app.add_handler(CommandHandler("watchlist", cmd_watchlist))
     app.run_polling()
 
 if __name__ == "__main__":
