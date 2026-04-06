@@ -222,10 +222,11 @@ def check_signal(symbol):
                         "strategy": f"Gap & Go ⚡ (+{round(gap_pct,1)}%)"}
 
         # ── 4. Reversal (ارتداد من قاع) 🔄 ─────────────────
-        if (rsi_prev < 35 and          # كان oversold
+        if (rsi_prev < 45 and          # كان منخفض (مخفف من 35)
             rsi > rsi_prev and         # RSI ارتد للأعلى
+            rsi > rsi_prev + 1 and     # ارتداد حقيقي مش عشوائي
             price > lowest and         # ارتد من القاع
-            vol_ratio > 2.0 and        # حجم قوي
+            vol_ratio > 1.5 and        # حجم مقبول (مخفف من 2.0)
             candle_green):             # شمعة خضراء
             last_signals[symbol] = time.time()
             return {"symbol": symbol, "price": round(price, 2),
@@ -445,3 +446,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
