@@ -42,12 +42,11 @@ ET = pytz.timezone("America/New_York")
 
 COOLDOWN     = 1800
 LOG_FILE     = "signals_log.json"
-TARGET_PCT   = 1.5
-STOP_PCT     = 0.75
+TARGET_PCT   = 1.5   # سيُعاد حسابه بناءً على ATR
+STOP_PCT     = 0.75  # سيُعاد حسابه بناءً على ATR
 TIMEOUT_MINS = 120
 MIN_PRICE    = 5.0
 MIN_VOLUME   = 1_000_000
-MAX_RSI      = 75
 
 last_signals = {}
 
@@ -95,8 +94,9 @@ def log_signal(signal):
         "entry_price":  signal["price"],
         "volume_ratio": signal["volume_ratio"],
         "rsi":          signal["rsi"],
-        "target":       round(signal["price"] * (1 + TARGET_PCT / 100), 2),
-        "stop":         round(signal["price"] * (1 - STOP_PCT  / 100), 2),
+        "atr_pct":      signal.get("atr_pct", 0),
+        "target":       signal["target"],
+        "stop":         signal["stop"],
         "result":       "pending",
         "exit_price":   None,
         "pnl_pct":      None,
@@ -115,37 +115,65 @@ def calc_rsi(series, period=14):
     rs    = gain / loss
     return 100 - (100 / (1 + rs))
 
+# ─── ATR — الهدف والوقف حسب تقلب السهم ──────────────────
+
+def calc_atr(df, period=14):
+    """ATR كنسبة مئوية من السعر"""
+    high  = df["High"]
+    low   = df["Low"]
+    close = df["Close"].shift(1)
+    tr    = (high - low).combine(
+        (high - close).abs(), max
+    ).combine(
+        (low  - close).abs(), max
+    )
+    atr     = tr.rolling(period).mean().iloc[-1]
+    price   = df["Close"].iloc[-1]
+    atr_pct = round(atr / price * 100, 2)
+    return atr_pct
+
+def calc_targets(price, atr_pct):
+    """
+    الهدف = 1.5x ATR
+    الوقف = 0.75x ATR
+    حد أدنى 0.5% وحد أقصى 4%
+    """
+    target_pct = max(0.5, min(4.0, atr_pct * 1.5))
+    stop_pct   = max(0.3, min(2.0, atr_pct * 0.75))
+    target     = round(price * (1 + target_pct / 100), 2)
+    stop       = round(price * (1 - stop_pct   / 100), 2)
+    return target, stop, round(target_pct, 2), round(stop_pct, 2)
+
 # ─── Stars ───────────────────────────────────────────────
 
 def calc_stars(vol_ratio, rsi, price_change_pct, strategy):
     stars = 1
     if vol_ratio >= 3.0:
         stars += 1
-    if strategy == "Reversal" and rsi < 35:
+    if strategy == "Reversal" and rsi < 25:
         stars += 1
-    elif strategy == "Breakout" and price_change_pct > 1.5:
+    elif strategy == "Breakout" and price_change_pct > 2.0:
         stars += 1
     elif strategy == "Gap&Go" and price_change_pct > 3.0:
         stars += 1
+    elif strategy == "VWAP" and vol_ratio >= 2.0:
+        stars += 1
     return min(stars, 3)
 
-# ─── فحص سهم واحد (yfinance مباشر — موثوق) ──────────────
+# ─── فحص سهم واحد ────────────────────────────────────────
 
 def check_symbol(symbol):
-    """يجلب بيانات كل سهم بشكل مستقل — يتجنب مشكلة MultiIndex"""
     if symbol in last_signals:
         if time.time() - last_signals[symbol] < COOLDOWN:
             return None
     try:
         ticker = yf.Ticker(symbol)
 
-        # بيانات 5 دقائق (آخر يومين)
         df5 = ticker.history(period="2d", interval="5m", auto_adjust=True)
         if df5 is None or df5.empty or len(df5) < 21:
             return None
 
-        # بيانات يومية (فلتر الحجم + Gap)
-        daily = ticker.history(period="5d", interval="1d", auto_adjust=True)
+        daily = ticker.history(period="10d", interval="1d", auto_adjust=True)
         if daily is None or daily.empty:
             return None
 
@@ -159,21 +187,27 @@ def check_symbol(symbol):
         if avg_daily_vol < MIN_VOLUME:
             return None
 
+        # ATR-based targets
+        atr_pct = calc_atr(df5)
+        if atr_pct == 0 or atr_pct != atr_pct:  # NaN
+            return None
+        target, stop, target_pct, stop_pct = calc_targets(price, atr_pct)
+
         # مؤشرات
         rsi_s    = calc_rsi(df5["Close"])
         rsi      = round(float(rsi_s.iloc[-1]), 1)
         rsi_prev = round(float(rsi_s.iloc[-2]), 1)
-        if rsi > MAX_RSI or rsi != rsi:  # تجاهل NaN
+        if rsi != rsi:  # NaN
             return None
 
         df5["EMA20"] = df5["Close"].ewm(span=20).mean()
         df5["EMA9"]  = df5["Close"].ewm(span=9).mean()
         df5["VWAP"]  = (df5["Close"] * df5["Volume"]).cumsum() / df5["Volume"].cumsum()
 
-        prev      = df5.iloc[-21:-1]
-        highest   = float(prev["High"].max())
-        lowest    = float(prev["Low"].min())
-        avg_vol   = float(prev["Volume"].mean())
+        prev     = df5.iloc[-21:-1]
+        highest  = float(prev["High"].max())
+        lowest   = float(prev["Low"].min())
+        avg_vol  = float(prev["Volume"].mean())
         if avg_vol == 0:
             return None
 
@@ -188,45 +222,55 @@ def check_symbol(symbol):
         price_30m_ago    = float(df5["Close"].iloc[-7]) if len(df5) >= 7 else float(df5["Close"].iloc[0])
         price_change_pct = round((price - price_30m_ago) / price_30m_ago * 100, 2)
 
-        # 1. Breakout
-        if price > highest and vol_ratio > 1.5 and price > ema20:
-            stars = calc_stars(vol_ratio, rsi, price_change_pct, "Breakout")
+        def make_signal(strategy_name, strategy_key):
             last_signals[symbol] = time.time()
-            return dict(symbol=symbol, price=round(price,2), volume_ratio=vol_ratio,
-                        rsi=rsi, stars=stars, price_change=price_change_pct,
-                        support=round(lowest,2), resistance=round(highest,2),
-                        strategy="Breakout 🚀")
+            stars = calc_stars(vol_ratio, rsi, price_change_pct, strategy_key)
+            return dict(
+                symbol=symbol, price=round(price, 2),
+                volume_ratio=vol_ratio, rsi=rsi, stars=stars,
+                price_change=price_change_pct,
+                support=round(lowest, 2), resistance=round(highest, 2),
+                strategy=strategy_name,
+                target=target, stop=stop,
+                target_pct=target_pct, stop_pct=stop_pct,
+                atr_pct=atr_pct,
+            )
 
-        # 2. VWAP Bounce
-        if prev_close < prev_vwap and price > vwap and vol_ratio > 1.2 and price > ema9 and rsi > 40:
-            stars = calc_stars(vol_ratio, rsi, price_change_pct, "VWAP")
-            last_signals[symbol] = time.time()
-            return dict(symbol=symbol, price=round(price,2), volume_ratio=vol_ratio,
-                        rsi=rsi, stars=stars, price_change=price_change_pct,
-                        support=round(vwap,2), resistance=round(highest,2),
-                        strategy="VWAP Bounce 📊")
+        # ── 1. Breakout 🚀 ──────────────────────────────
+        # شرط الحجم رُفع لـ 2x (كان 1.5x) — Breakout حقيقي
+        if price > highest and vol_ratio >= 2.0 and price > ema20:
+            return make_signal("Breakout 🚀", "Breakout")
 
-        # 3. Gap & Go
+        # ── 2. VWAP Bounce 📊 ───────────────────────────
+        # RSI بين 45-65 — Bounce صحيح ليس سهم ضعيف
+        if (prev_close < prev_vwap and price > vwap and
+                vol_ratio > 1.2 and price > ema9 and 45 <= rsi <= 65):
+            return make_signal("VWAP Bounce 📊", "VWAP")
+
+        # ── 3. Gap & Go ⚡ ──────────────────────────────
         if len(daily) >= 2:
             prev_day_close = float(daily["Close"].iloc[-2])
             today_open     = float(daily["Open"].iloc[-1])
             gap_pct = (today_open - prev_day_close) / prev_day_close * 100
             if gap_pct > 1.5 and price > today_open and vol_ratio > 2.0:
-                stars = calc_stars(vol_ratio, rsi, gap_pct, "Gap&Go")
                 last_signals[symbol] = time.time()
-                return dict(symbol=symbol, price=round(price,2), volume_ratio=vol_ratio,
-                            rsi=rsi, stars=stars, price_change=round(gap_pct,2),
-                            support=round(today_open,2), resistance=round(highest,2),
-                            strategy=f"Gap & Go ⚡ (+{round(gap_pct,1)}%)")
+                stars = calc_stars(vol_ratio, rsi, gap_pct, "Gap&Go")
+                return dict(
+                    symbol=symbol, price=round(price, 2),
+                    volume_ratio=vol_ratio, rsi=rsi, stars=stars,
+                    price_change=round(gap_pct, 2),
+                    support=round(today_open, 2), resistance=round(highest, 2),
+                    strategy=f"Gap & Go ⚡ (+{round(gap_pct,1)}%)",
+                    target=target, stop=stop,
+                    target_pct=target_pct, stop_pct=stop_pct,
+                    atr_pct=atr_pct,
+                )
 
-        # 4. Reversal
-        if rsi_prev < 45 and rsi > rsi_prev + 1 and price > lowest and vol_ratio > 1.5 and candle_green:
-            stars = calc_stars(vol_ratio, rsi, price_change_pct, "Reversal")
-            last_signals[symbol] = time.time()
-            return dict(symbol=symbol, price=round(price,2), volume_ratio=vol_ratio,
-                        rsi=rsi, stars=stars, price_change=price_change_pct,
-                        support=round(lowest,2), resistance=round(highest,2),
-                        strategy=f"Reversal 🔄 (RSI {rsi_prev}→{rsi})")
+        # ── 4. Reversal 🔄 ──────────────────────────────
+        # RSI < 30 فقط (كان < 45) — Oversold حقيقي
+        if (rsi_prev < 30 and rsi > rsi_prev + 2 and
+                price > lowest and vol_ratio > 1.5 and candle_green):
+            return make_signal(f"Reversal 🔄 (RSI {rsi_prev}→{rsi})", "Reversal")
 
     except Exception as e:
         print(f"خطأ {symbol}: {e}")
@@ -235,8 +279,6 @@ def check_symbol(symbol):
 # ─── رسالة ───────────────────────────────────────────────
 
 def build_message(s):
-    target = round(s["price"] * (1 + TARGET_PCT / 100), 2)
-    stop   = round(s["price"] * (1 - STOP_PCT  / 100), 2)
     now_et = datetime.now(ET).strftime("%H:%M ET")
     stars  = "⭐" * s["stars"]
     change = f"+{s['price_change']}%" if s['price_change'] > 0 else f"{s['price_change']}%"
@@ -245,11 +287,12 @@ def build_message(s):
         f"السهم:      {s['symbol']}\n"
         f"السعر:      ${s['price']} ({change})\n"
         f"RSI:        {s['rsi']}\n"
-        f"الحجم:      {s['volume_ratio']}x المتوسط\n\n"
+        f"الحجم:      {s['volume_ratio']}x المتوسط\n"
+        f"ATR:        {s['atr_pct']}%\n\n"
         f"📊 دعم:     ${s['support']}\n"
         f"📊 مقاومة: ${s['resistance']}\n\n"
-        f"🎯 الهدف:   ${target} (+{TARGET_PCT}%)\n"
-        f"🛑 الوقف:   ${stop} (-{STOP_PCT}%)\n\n"
+        f"🎯 الهدف:   ${s['target']} (+{s['target_pct']}%)\n"
+        f"🛑 الوقف:   ${s['stop']} (-{s['stop_pct']}%)\n\n"
         f"🕐 {now_et}"
     )
 
@@ -315,17 +358,16 @@ async def start(update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"البوت يعمل ✅\n\n"
         f"يراقب {len(WATCHLIST)} سهم\n"
-        f"فلتر السعر: >${MIN_PRICE}\n"
-        f"فلتر الحجم: >{MIN_VOLUME:,}/يوم\n"
-        f"فلتر RSI: <{MAX_RSI}\n\n"
+        f"فلتر السعر:  >${MIN_PRICE}\n"
+        f"فلتر الحجم:  >{MIN_VOLUME:,}/يوم\n\n"
         f"الاستراتيجيات:\n"
-        f"• Breakout 🚀\n"
-        f"• VWAP Bounce 📊\n"
+        f"• Breakout 🚀  (vol ≥ 2x)\n"
+        f"• VWAP Bounce 📊  (RSI 45-65)\n"
         f"• Gap & Go ⚡\n"
-        f"• Reversal 🔄\n\n"
+        f"• Reversal 🔄  (RSI < 30)\n\n"
+        f"الهدف/الوقف: مبني على ATR السهم\n"
         f"قوة الإشارة: ⭐ إلى ⭐⭐⭐\n\n"
-        f"{status}\n"
-        f"الفحص: كل 60 ثانية\n\n"
+        f"{status}\n\n"
         f"/scan      — فحص فوري\n"
         f"/pending   — إشارات مفتوحة\n"
         f"/stats     — تحليل الأداء\n"
@@ -401,8 +443,7 @@ async def cmd_watchlist(update, context: ContextTypes.DEFAULT_TYPE):
         f"📋 قائمة المراقبة\n\n"
         f"عدد الأسهم: {len(WATCHLIST)}\n"
         f"فلتر السعر: >${MIN_PRICE}\n"
-        f"فلتر الحجم: >{MIN_VOLUME:,}/يوم\n"
-        f"فلتر RSI:   <{MAX_RSI}\n\n"
+        f"فلتر الحجم: >{MIN_VOLUME:,}/يوم\n\n"
         f"أول 20 سهم:\n" +
         "\n".join(f"• {s}" for s in WATCHLIST[:20]) +
         f"\n\n... و {len(WATCHLIST)-20} سهم آخر"
@@ -425,7 +466,7 @@ async def scan(bot):
                 print(f"✅ إشارة: {signal['symbol']} — {signal['strategy']}")
         except Exception as e:
             print(f"خطأ {symbol}: {e}")
-        await asyncio.sleep(0.5)  # تجنب rate limiting
+        await asyncio.sleep(0.5)
 
     print(f"✅ انتهى — {signals_found} إشارة")
 
