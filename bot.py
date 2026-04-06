@@ -38,12 +38,9 @@ WATCHLIST = [
 ]
 WATCHLIST = list(dict.fromkeys(WATCHLIST))
 
-ET = pytz.timezone("America/New_York")
-
+ET           = pytz.timezone("America/New_York")
 COOLDOWN     = 1800
 LOG_FILE     = "signals_log.json"
-TARGET_PCT   = 1.5   # سيُعاد حسابه بناءً على ATR
-STOP_PCT     = 0.75  # سيُعاد حسابه بناءً على ATR
 TIMEOUT_MINS = 120
 MIN_PRICE    = 5.0
 MIN_VOLUME   = 1_000_000
@@ -95,9 +92,15 @@ def log_signal(signal):
         "volume_ratio": signal["volume_ratio"],
         "rsi":          signal["rsi"],
         "atr_pct":      signal.get("atr_pct", 0),
-        "target":       signal["target"],
+        "target1":      signal["target1"],
+        "target2":      signal["target2"],
         "stop":         signal["stop"],
-        "result":       "pending",
+        "target1_pct":  signal["target1_pct"],
+        "target2_pct":  signal["target2_pct"],
+        "stop_pct":     signal["stop_pct"],
+        "result":       "pending",       # pending / partial / win / loss / timeout
+        "target1_hit":  False,
+        "target2_hit":  False,
         "exit_price":   None,
         "pnl_pct":      None,
         "entry_ts":     time.time(),
@@ -115,34 +118,35 @@ def calc_rsi(series, period=14):
     rs    = gain / loss
     return 100 - (100 / (1 + rs))
 
-# ─── ATR — الهدف والوقف حسب تقلب السهم ──────────────────
+# ─── ATR ─────────────────────────────────────────────────
 
 def calc_atr(df, period=14):
-    """ATR كنسبة مئوية من السعر"""
     high  = df["High"]
     low   = df["Low"]
     close = df["Close"].shift(1)
-    tr    = (high - low).combine(
+    tr = (high - low).combine(
         (high - close).abs(), max
     ).combine(
         (low  - close).abs(), max
     )
     atr     = tr.rolling(period).mean().iloc[-1]
     price   = df["Close"].iloc[-1]
-    atr_pct = round(atr / price * 100, 2)
+    atr_pct = round(float(atr) / float(price) * 100, 2)
     return atr_pct
 
 def calc_targets(price, atr_pct):
     """
-    الهدف = 1.5x ATR
-    الوقف = 0.75x ATR
-    حد أدنى 0.5% وحد أقصى 4%
+    هدف 1 = ATR × 1.5  (يبيع 50%)
+    هدف 2 = ATR × 3.0  (يبيع الباقي)
+    وقف   = ATR × 0.75
     """
-    target_pct = max(0.5, min(4.0, atr_pct * 1.5))
-    stop_pct   = max(0.3, min(2.0, atr_pct * 0.75))
-    target     = round(price * (1 + target_pct / 100), 2)
-    stop       = round(price * (1 - stop_pct   / 100), 2)
-    return target, stop, round(target_pct, 2), round(stop_pct, 2)
+    t1_pct   = max(0.5, min(4.0, atr_pct * 1.5))
+    t2_pct   = max(1.0, min(8.0, atr_pct * 3.0))
+    stop_pct = max(0.3, min(2.0, atr_pct * 0.75))
+    target1  = round(price * (1 + t1_pct   / 100), 2)
+    target2  = round(price * (1 + t2_pct   / 100), 2)
+    stop     = round(price * (1 - stop_pct / 100), 2)
+    return target1, target2, stop, round(t1_pct,2), round(t2_pct,2), round(stop_pct,2)
 
 # ─── Stars ───────────────────────────────────────────────
 
@@ -168,8 +172,7 @@ def check_symbol(symbol):
             return None
     try:
         ticker = yf.Ticker(symbol)
-
-        df5 = ticker.history(period="2d", interval="5m", auto_adjust=True)
+        df5    = ticker.history(period="2d", interval="5m", auto_adjust=True)
         if df5 is None or df5.empty or len(df5) < 21:
             return None
 
@@ -180,24 +183,21 @@ def check_symbol(symbol):
         price = float(df5["Close"].iloc[-1])
         vol   = float(df5["Volume"].iloc[-1])
 
-        # فلاتر أساسية
         if price < MIN_PRICE:
             return None
-        avg_daily_vol = float(daily["Volume"].mean())
-        if avg_daily_vol < MIN_VOLUME:
+        if float(daily["Volume"].mean()) < MIN_VOLUME:
             return None
 
-        # ATR-based targets
         atr_pct = calc_atr(df5)
-        if atr_pct == 0 or atr_pct != atr_pct:  # NaN
+        if not atr_pct or atr_pct != atr_pct:
             return None
-        target, stop, target_pct, stop_pct = calc_targets(price, atr_pct)
 
-        # مؤشرات
+        target1, target2, stop, t1_pct, t2_pct, stop_pct = calc_targets(price, atr_pct)
+
         rsi_s    = calc_rsi(df5["Close"])
         rsi      = round(float(rsi_s.iloc[-1]), 1)
         rsi_prev = round(float(rsi_s.iloc[-2]), 1)
-        if rsi != rsi:  # NaN
+        if rsi != rsi:
             return None
 
         df5["EMA20"] = df5["Close"].ewm(span=20).mean()
@@ -218,59 +218,54 @@ def check_symbol(symbol):
         prev_close   = float(df5["Close"].iloc[-2])
         prev_vwap    = float(df5["VWAP"].iloc[-2])
         candle_green = float(df5["Close"].iloc[-1]) > float(df5["Open"].iloc[-1])
+        price_30m    = float(df5["Close"].iloc[-7]) if len(df5) >= 7 else float(df5["Close"].iloc[0])
+        chg_pct      = round((price - price_30m) / price_30m * 100, 2)
 
-        price_30m_ago    = float(df5["Close"].iloc[-7]) if len(df5) >= 7 else float(df5["Close"].iloc[0])
-        price_change_pct = round((price - price_30m_ago) / price_30m_ago * 100, 2)
-
-        def make_signal(strategy_name, strategy_key):
+        def make(name, key):
             last_signals[symbol] = time.time()
-            stars = calc_stars(vol_ratio, rsi, price_change_pct, strategy_key)
             return dict(
-                symbol=symbol, price=round(price, 2),
-                volume_ratio=vol_ratio, rsi=rsi, stars=stars,
-                price_change=price_change_pct,
-                support=round(lowest, 2), resistance=round(highest, 2),
-                strategy=strategy_name,
-                target=target, stop=stop,
-                target_pct=target_pct, stop_pct=stop_pct,
-                atr_pct=atr_pct,
+                symbol=symbol, price=round(price,2),
+                volume_ratio=vol_ratio, rsi=rsi,
+                stars=calc_stars(vol_ratio, rsi, chg_pct, key),
+                price_change=chg_pct,
+                support=round(lowest,2), resistance=round(highest,2),
+                strategy=name, atr_pct=atr_pct,
+                target1=target1, target2=target2, stop=stop,
+                target1_pct=t1_pct, target2_pct=t2_pct, stop_pct=stop_pct,
             )
 
-        # ── 1. Breakout 🚀 ──────────────────────────────
-        # شرط الحجم رُفع لـ 2x (كان 1.5x) — Breakout حقيقي
+        # 1. Breakout
         if price > highest and vol_ratio >= 2.0 and price > ema20:
-            return make_signal("Breakout 🚀", "Breakout")
+            return make("Breakout 🚀", "Breakout")
 
-        # ── 2. VWAP Bounce 📊 ───────────────────────────
-        # RSI بين 45-65 — Bounce صحيح ليس سهم ضعيف
+        # 2. VWAP Bounce
         if (prev_close < prev_vwap and price > vwap and
                 vol_ratio > 1.2 and price > ema9 and 45 <= rsi <= 65):
-            return make_signal("VWAP Bounce 📊", "VWAP")
+            return make("VWAP Bounce 📊", "VWAP")
 
-        # ── 3. Gap & Go ⚡ ──────────────────────────────
+        # 3. Gap & Go
         if len(daily) >= 2:
             prev_day_close = float(daily["Close"].iloc[-2])
             today_open     = float(daily["Open"].iloc[-1])
             gap_pct = (today_open - prev_day_close) / prev_day_close * 100
             if gap_pct > 1.5 and price > today_open and vol_ratio > 2.0:
                 last_signals[symbol] = time.time()
-                stars = calc_stars(vol_ratio, rsi, gap_pct, "Gap&Go")
                 return dict(
-                    symbol=symbol, price=round(price, 2),
-                    volume_ratio=vol_ratio, rsi=rsi, stars=stars,
-                    price_change=round(gap_pct, 2),
-                    support=round(today_open, 2), resistance=round(highest, 2),
+                    symbol=symbol, price=round(price,2),
+                    volume_ratio=vol_ratio, rsi=rsi,
+                    stars=calc_stars(vol_ratio, rsi, gap_pct, "Gap&Go"),
+                    price_change=round(gap_pct,2),
+                    support=round(today_open,2), resistance=round(highest,2),
                     strategy=f"Gap & Go ⚡ (+{round(gap_pct,1)}%)",
-                    target=target, stop=stop,
-                    target_pct=target_pct, stop_pct=stop_pct,
                     atr_pct=atr_pct,
+                    target1=target1, target2=target2, stop=stop,
+                    target1_pct=t1_pct, target2_pct=t2_pct, stop_pct=stop_pct,
                 )
 
-        # ── 4. Reversal 🔄 ──────────────────────────────
-        # RSI < 30 فقط (كان < 45) — Oversold حقيقي
+        # 4. Reversal
         if (rsi_prev < 30 and rsi > rsi_prev + 2 and
                 price > lowest and vol_ratio > 1.5 and candle_green):
-            return make_signal(f"Reversal 🔄 (RSI {rsi_prev}→{rsi})", "Reversal")
+            return make(f"Reversal 🔄 (RSI {rsi_prev}→{rsi})", "Reversal")
 
     except Exception as e:
         print(f"خطأ {symbol}: {e}")
@@ -284,33 +279,39 @@ def build_message(s):
     change = f"+{s['price_change']}%" if s['price_change'] > 0 else f"{s['price_change']}%"
     return (
         f"🚨 {stars} إشارة — {s['strategy']}\n\n"
-        f"السهم:      {s['symbol']}\n"
-        f"السعر:      ${s['price']} ({change})\n"
-        f"RSI:        {s['rsi']}\n"
-        f"الحجم:      {s['volume_ratio']}x المتوسط\n"
-        f"ATR:        {s['atr_pct']}%\n\n"
-        f"📊 دعم:     ${s['support']}\n"
-        f"📊 مقاومة: ${s['resistance']}\n\n"
-        f"🎯 الهدف:   ${s['target']} (+{s['target_pct']}%)\n"
-        f"🛑 الوقف:   ${s['stop']} (-{s['stop_pct']}%)\n\n"
+        f"السهم:       {s['symbol']}\n"
+        f"السعر:       ${s['price']} ({change})\n"
+        f"RSI:         {s['rsi']}\n"
+        f"الحجم:       {s['volume_ratio']}x المتوسط\n"
+        f"ATR:         {s['atr_pct']}%\n\n"
+        f"📊 دعم:      ${s['support']}\n"
+        f"📊 مقاومة:  ${s['resistance']}\n\n"
+        f"🎯 هدف 1:    ${s['target1']} (+{s['target1_pct']}%) — بيع 50%\n"
+        f"🎯 هدف 2:    ${s['target2']} (+{s['target2_pct']}%) — بيع الباقي\n"
+        f"🛑 الوقف:    ${s['stop']} (-{s['stop_pct']}%)\n\n"
         f"🕐 {now_et}"
     )
 
-# ─── تقييم الإشارات المفتوحة ──────────────────────────────
+# ─── تقييم الإشارات المفتوحة (نظام هدفين) ────────────────
 
 async def evaluate_pending(bot):
     log     = load_log()
     updated = False
     now     = time.time()
+
     for entry in log:
-        if entry["result"] != "pending":
+        if entry["result"] not in ("pending", "partial"):
             continue
+
         symbol      = entry["symbol"]
         entry_price = entry["entry_price"]
-        target      = entry["target"]
+        target1     = entry["target1"]
+        target2     = entry["target2"]
         stop        = entry["stop"]
         entry_ts    = entry["entry_ts"]
         elapsed_min = (now - entry_ts) / 60
+        t1_hit      = entry.get("target1_hit", False)
+
         try:
             df = yf.Ticker(symbol).history(period="1d", interval="1m")
             if df is None or df.empty:
@@ -320,34 +321,100 @@ async def evaluate_pending(bot):
             df_after   = df[df.index >= entry_time]
             if df_after.empty:
                 continue
-            result = exit_price = None
+
+            result = None
+
             for i in range(len(df_after)):
-                if df_after["High"].iloc[i] >= target:
-                    result = "win"; exit_price = target; break
-                elif df_after["Low"].iloc[i] <= stop:
-                    result = "loss"; exit_price = stop; break
-            if result is None:
-                if elapsed_min >= TIMEOUT_MINS:
-                    result = "timeout"
-                    exit_price = round(float(df_after["Close"].iloc[-1]), 2)
+                high_c = float(df_after["High"].iloc[i])
+                low_c  = float(df_after["Low"].iloc[i])
+
+                # هدف 1 لم يُضرب بعد
+                if not t1_hit and high_c >= target1:
+                    t1_hit = True
+                    entry["target1_hit"] = True
+                    entry["result"]      = "partial"
+                    updated = True
+                    pnl_partial = round((target1 - entry_price) / entry_price * 100, 2)
+                    await bot.send_message(chat_id=CHAT_ID, text=(
+                        f"✅ هدف 1 — {symbol}\n\n"
+                        f"بيع 50% @ ${target1} (+{pnl_partial}%)\n"
+                        f"الباقي يستهدف ${target2}\n"
+                        f"الوقف انتقل لـ ${entry_price} (تعادل)"
+                    ))
+                    # نحرك الوقف للتعادل بعد هدف 1
+                    entry["stop"] = entry_price
+                    stop = entry_price
+
+                # بعد هدف 1 — الوقف أصبح التعادل
+                if t1_hit:
+                    if low_c <= stop:
+                        # خرج بالتعادل على النصف الثاني
+                        pnl = round(((target1 - entry_price) * 0.5) / entry_price * 100, 2)
+                        entry["result"]     = "partial_exit"
+                        entry["exit_price"] = stop
+                        entry["pnl_pct"]    = pnl
+                        updated = True
+                        await bot.send_message(chat_id=CHAT_ID, text=(
+                            f"⚪ خروج {symbol}\n\n"
+                            f"هدف 1 ✅ +{round((target1-entry_price)/entry_price*100,2)}% (50%)\n"
+                            f"النصف الثاني خرج بالتعادل\n"
+                            f"صافي PnL: +{pnl}%"
+                        ))
+                        result = "done"
+                        break
+                    if high_c >= target2:
+                        pnl = round(((target1 - entry_price) * 0.5 + (target2 - entry_price) * 0.5) / entry_price * 100, 2)
+                        entry["result"]     = "win"
+                        entry["exit_price"] = target2
+                        entry["pnl_pct"]    = pnl
+                        updated = True
+                        await bot.send_message(chat_id=CHAT_ID, text=(
+                            f"🏆 هدف 2 — {symbol}\n\n"
+                            f"هدف 1 ✅ +{round((target1-entry_price)/entry_price*100,2)}% (50%)\n"
+                            f"هدف 2 ✅ +{round((target2-entry_price)/entry_price*100,2)}% (50%)\n"
+                            f"صافي PnL: +{pnl}%"
+                        ))
+                        result = "done"
+                        break
                 else:
-                    continue
-            pnl = round((exit_price - entry_price) / entry_price * 100, 2)
-            entry["result"]     = result
-            entry["exit_price"] = exit_price
-            entry["pnl_pct"]    = pnl
-            updated             = True
-            icon = "✅" if result == "win" else ("❌" if result == "loss" else "⏱")
-            await bot.send_message(chat_id=CHAT_ID, text=(
-                f"{icon} نتيجة {symbol}\n\n"
-                f"الاستراتيجية: {entry.get('strategy','')}\n"
-                f"النتيجة:    {result.upper()}\n"
-                f"دخول:      ${entry_price}\n"
-                f"خروج:      ${exit_price}\n"
-                f"ربح/خسارة: {pnl}%"
-            ))
+                    # هدف 1 لم يُضرب — الوقف الأصلي
+                    if low_c <= stop:
+                        pnl = round((stop - entry_price) / entry_price * 100, 2)
+                        entry["result"]     = "loss"
+                        entry["exit_price"] = stop
+                        entry["pnl_pct"]    = pnl
+                        updated = True
+                        await bot.send_message(chat_id=CHAT_ID, text=(
+                            f"❌ وقف {symbol}\n\n"
+                            f"خروج @ ${stop}\n"
+                            f"PnL: {pnl}%"
+                        ))
+                        result = "done"
+                        break
+
+            if result == "done":
+                continue
+
+            # Timeout
+            if elapsed_min >= TIMEOUT_MINS and entry["result"] in ("pending", "partial"):
+                exit_price = round(float(df_after["Close"].iloc[-1]), 2)
+                if t1_hit:
+                    pnl = round(((target1 - entry_price) * 0.5 + (exit_price - entry_price) * 0.5) / entry_price * 100, 2)
+                    msg = (f"⏱ Timeout {symbol}\n\n"
+                           f"هدف 1 ✅\nالنصف الثاني @ ${exit_price}\nصافي PnL: {pnl:+}%")
+                else:
+                    pnl = round((exit_price - entry_price) / entry_price * 100, 2)
+                    msg = (f"⏱ Timeout {symbol}\n\n"
+                           f"خروج @ ${exit_price}\nPnL: {pnl:+}%")
+                entry["result"]     = "timeout"
+                entry["exit_price"] = exit_price
+                entry["pnl_pct"]    = pnl
+                updated = True
+                await bot.send_message(chat_id=CHAT_ID, text=msg)
+
         except Exception as e:
             print(f"خطأ تقييم {symbol}: {e}")
+
     if updated:
         save_log(log)
 
@@ -357,16 +424,17 @@ async def start(update, context: ContextTypes.DEFAULT_TYPE):
     status = "✅ السوق مفتوح" if market_is_open() else "🔴 السوق مغلق"
     await update.message.reply_text(
         f"البوت يعمل ✅\n\n"
-        f"يراقب {len(WATCHLIST)} سهم\n"
-        f"فلتر السعر:  >${MIN_PRICE}\n"
-        f"فلتر الحجم:  >{MIN_VOLUME:,}/يوم\n\n"
+        f"يراقب {len(WATCHLIST)} سهم\n\n"
         f"الاستراتيجيات:\n"
         f"• Breakout 🚀  (vol ≥ 2x)\n"
         f"• VWAP Bounce 📊  (RSI 45-65)\n"
         f"• Gap & Go ⚡\n"
         f"• Reversal 🔄  (RSI < 30)\n\n"
-        f"الهدف/الوقف: مبني على ATR السهم\n"
-        f"قوة الإشارة: ⭐ إلى ⭐⭐⭐\n\n"
+        f"نظام الهدفين:\n"
+        f"🎯 هدف 1 = ATR × 1.5 → بيع 50%\n"
+        f"🎯 هدف 2 = ATR × 3.0 → بيع الباقي\n"
+        f"🛑 وقف   = ATR × 0.75\n"
+        f"(بعد هدف 1 → الوقف ينتقل للتعادل)\n\n"
         f"{status}\n\n"
         f"/scan      — فحص فوري\n"
         f"/pending   — إشارات مفتوحة\n"
@@ -393,22 +461,22 @@ async def manual_scan(update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_stats(update, context: ContextTypes.DEFAULT_TYPE):
     log  = load_log()
-    done = [e for e in log if e["result"] != "pending"]
+    done = [e for e in log if e["result"] not in ("pending", "partial")]
     if not done:
         await update.message.reply_text("لا توجد نتائج بعد")
         return
-    wins     = [e for e in done if e["result"] == "win"]
-    losses   = [e for e in done if e["result"] == "loss"]
-    timeouts = [e for e in done if e["result"] == "timeout"]
-    win_rate = round(len(wins) / len(done) * 100, 1)
-    avg_pnl  = round(sum(e["pnl_pct"] for e in done) / len(done), 2)
-    strategies = {}
+    wins        = [e for e in done if e["result"] in ("win", "partial_exit")]
+    losses      = [e for e in done if e["result"] == "loss"]
+    timeouts    = [e for e in done if e["result"] == "timeout"]
+    win_rate    = round(len(wins) / len(done) * 100, 1)
+    avg_pnl     = round(sum(e["pnl_pct"] for e in done if e["pnl_pct"]) / len(done), 2)
+    strategies  = {}
     for e in done:
         s = e.get("strategy", "Unknown").split()[0]
         if s not in strategies:
             strategies[s] = {"win": 0, "total": 0}
         strategies[s]["total"] += 1
-        if e["result"] == "win":
+        if e["result"] in ("win", "partial_exit"):
             strategies[s]["win"] += 1
     strat_lines = ""
     for s, d in strategies.items():
@@ -416,34 +484,34 @@ async def cmd_stats(update, context: ContextTypes.DEFAULT_TYPE):
         strat_lines += f"  {s}: {sr}% ({d['total']} إشارة)\n"
     await update.message.reply_text(
         f"📊 تحليل الأداء\n\n"
-        f"الإجمالي:       {len(done)}\n"
-        f"✅ نجاح:        {len(wins)}\n"
-        f"❌ خسارة:       {len(losses)}\n"
-        f"⏱ timeout:      {len(timeouts)}\n\n"
-        f"🎯 نسبة النجاح: {win_rate}%\n"
-        f"📈 متوسط PnL:   {avg_pnl}%\n\n"
+        f"الإجمالي:        {len(done)}\n"
+        f"✅ نجاح كامل:   {len([e for e in done if e['result']=='win'])}\n"
+        f"⚪ هدف 1 فقط:   {len([e for e in done if e['result']=='partial_exit'])}\n"
+        f"❌ خسارة:        {len(losses)}\n"
+        f"⏱ timeout:       {len(timeouts)}\n\n"
+        f"🎯 نسبة النجاح:  {win_rate}%\n"
+        f"📈 متوسط PnL:    {avg_pnl}%\n\n"
         f"حسب الاستراتيجية:\n{strat_lines}\n"
         f"{'✅ النظام مربح' if avg_pnl > 0 else '❌ يحتاج تعديل'}"
     )
 
 async def cmd_pending(update, context: ContextTypes.DEFAULT_TYPE):
     log     = load_log()
-    pending = [e for e in log if e["result"] == "pending"]
+    pending = [e for e in log if e["result"] in ("pending", "partial")]
     if not pending:
         await update.message.reply_text("لا توجد إشارات مفتوحة")
         return
     lines = [f"⏳ مفتوحة ({len(pending)})\n"]
     for e in pending:
-        stars = "⭐" * e.get("stars", 1)
-        lines.append(f"• {e['symbol']} {stars} @ ${e['entry_price']} — {e['time']}")
+        stars  = "⭐" * e.get("stars", 1)
+        status = "🎯 هدف 1 ✅" if e.get("target1_hit") else "⏳"
+        lines.append(f"• {e['symbol']} {stars} @ ${e['entry_price']} {status} — {e['time']}")
     await update.message.reply_text("\n".join(lines))
 
 async def cmd_watchlist(update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"📋 قائمة المراقبة\n\n"
-        f"عدد الأسهم: {len(WATCHLIST)}\n"
-        f"فلتر السعر: >${MIN_PRICE}\n"
-        f"فلتر الحجم: >{MIN_VOLUME:,}/يوم\n\n"
+        f"عدد الأسهم: {len(WATCHLIST)}\n\n"
         f"أول 20 سهم:\n" +
         "\n".join(f"• {s}" for s in WATCHLIST[:20]) +
         f"\n\n... و {len(WATCHLIST)-20} سهم آخر"
@@ -455,7 +523,6 @@ async def scan(bot):
     now_et = datetime.now(ET).strftime("%H:%M ET")
     print(f"🔍 فحص {len(WATCHLIST)} سهم... {now_et}")
     signals_found = 0
-
     for symbol in WATCHLIST:
         try:
             signal = check_symbol(symbol)
@@ -467,7 +534,6 @@ async def scan(bot):
         except Exception as e:
             print(f"خطأ {symbol}: {e}")
         await asyncio.sleep(0.5)
-
     print(f"✅ انتهى — {signals_found} إشارة")
 
 # ─── الجدولة ─────────────────────────────────────────────
