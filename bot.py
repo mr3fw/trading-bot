@@ -14,40 +14,28 @@ TOKEN   = os.environ.get("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 WATCHLIST = [
-    "AAPL","MSFT","NVDA","AMZN","GOOGL","GOOG","META","TSLA","BRK-B","AVGO",
+    "AAPL","MSFT","NVDA","AMZN","GOOGL","META","TSLA","AVGO",
     "JPM","LLY","UNH","XOM","V","MA","COST","HD","PG","ABBV","MRK","CVX","NFLX",
     "CRM","BAC","KO","PEP","TMO","ACN","MCD","CSCO","ABT","ADBE","WMT","TXN",
     "PM","NKE","DHR","NEE","ORCL","RTX","HON","AMGN","LOW","UPS","QCOM","IBM",
-    "CAT","GS","INTU","SPGI","BLK","ISRG","ELV","MDT","AXP","T","DE","GILD",
+    "CAT","GS","INTU","SPGI","BLK","ISRG","MDT","AXP","T","DE","GILD",
     "NOW","SYK","VRTX","ZTS","BMY","C","MO","CL","DUK","SO","PLD","AMT",
     "CI","CB","TJX","USB","PNC","REGN","HUM","ITW","CME","ETN","APD",
     "GD","NSC","FDX","EMR","MCO","PSA","F","GM","SHW","EOG","SLB","OXY",
-    "KMB","CCI","WM","CARR","OTIS","CTAS","PAYX","ADP","MSCI","ICE",
     "KLAC","LRCX","AMAT","MCHP","ADI","SNPS","CDNS","PH","ROK","AME",
-    "BIIB","MRNA","DXCM","BSX","EW","RMD","BAX",
-    "AMD","INTC","MU","WDC","HPQ","HPE","DELL",
-    "UBER","LYFT","ABNB","COIN","PYPL","AFRM","SOFI",
+    "BIIB","MRNA","DXCM","BSX","EW","RMD",
+    "AMD","INTC","MU","DELL",
+    "UBER","ABNB","COIN","PYPL","SOFI",
     "NET","SNOW","MDB","TEAM","HUBS","CRWD","DDOG","ZS","OKTA",
-    "DIS","WBD","AMC","FOX","FOXA",
-    "LEN","PHM","DHI","KBH",
-    "BLDR","TREX","MAS","OC",
-    "ARCC","MAIN","HTGC",
-    "WFC","MS","SCHW","COF","DFS","SYF",
-    "MET","PRU","AFL","ALL","TRV","AIG",
-    "CVS","WBA","HCA",
-    "ZBH","HOLX","NVST",
-    "COP","MPC","VLO","PSX","PXD","DVN","HES","APA","MRO",
-    "AEP","EXC","SRE","PEG","ED","XEL","WEC","DTE",
-    "EQIX","EXR","WELL","VTR","SPG",
-    "MMM","GE","TT","JCI","IR","GNRC","XYL","SWK",
-    "BA","LMT","NOC","L3H","LDOS","CACI","SAIC","BAH",
-    "EBAY","ETSY","CHWY",
-    "SNAP","PINS","MTCH","BMBL",
-    "EA","TTWO","RBLX","DKNG","PENN","MGM","LVS","WYNN",
-    "SBUX","YUM","QSR","DPZ","CMG","CAVA",
-    "SBAC","AMT","CCI"
+    "DIS","WBD","AMC",
+    "LEN","PHM","DHI",
+    "WFC","MS","SCHW","COF",
+    "COP","MPC","VLO","DVN",
+    "EQIX","SPG",
+    "MMM","GE","BA","LMT",
+    "SBUX","CMG","CAVA",
+    "SNAP","EA","TTWO","RBLX","DKNG",
 ]
-
 WATCHLIST = list(dict.fromkeys(WATCHLIST))
 
 ET = pytz.timezone("America/New_York")
@@ -63,7 +51,7 @@ MAX_RSI      = 75
 
 last_signals = {}
 
-# ─── السوق ────────────────────────────────────────────────
+# ─── السوق ───────────────────────────────────────────────
 
 def market_is_open():
     now = datetime.now(ET)
@@ -84,7 +72,7 @@ def time_until_open():
     mins = int((next_open - now).total_seconds() / 60)
     return mins // 60, mins % 60
 
-# ─── ملف التسجيل ──────────────────────────────────────────
+# ─── Log ─────────────────────────────────────────────────
 
 def load_log():
     if os.path.exists(LOG_FILE):
@@ -118,7 +106,7 @@ def log_signal(signal):
     save_log(log)
     return entry
 
-# ─── RSI ──────────────────────────────────────────────────
+# ─── RSI ─────────────────────────────────────────────────
 
 def calc_rsi(series, period=14):
     delta = series.diff()
@@ -127,7 +115,7 @@ def calc_rsi(series, period=14):
     rs    = gain / loss
     return 100 - (100 / (1 + rs))
 
-# ─── قوة الإشارة ──────────────────────────────────────────
+# ─── Stars ───────────────────────────────────────────────
 
 def calc_stars(vol_ratio, rsi, price_change_pct, strategy):
     stars = 1
@@ -141,48 +129,41 @@ def calc_stars(vol_ratio, rsi, price_change_pct, strategy):
         stars += 1
     return min(stars, 3)
 
-# ─── الفحص السريع (batch) ─────────────────────────────────
+# ─── فحص سهم واحد (yfinance مباشر — موثوق) ──────────────
 
-def fetch_batch(symbols):
-    """جلب بيانات دفعة واحدة — أسرع بـ 10x"""
-    try:
-        data = yf.download(
-            symbols,
-            period="5d",
-            interval="5m",
-            group_by="ticker",
-            auto_adjust=True,
-            progress=False,
-            threads=True
-        )
-        return data
-    except Exception as e:
-        print(f"خطأ batch: {e}")
-        return None
-
-# ─── فحص سهم واحد ─────────────────────────────────────────
-
-def check_signal(symbol, df5, daily):
+def check_symbol(symbol):
+    """يجلب بيانات كل سهم بشكل مستقل — يتجنب مشكلة MultiIndex"""
     if symbol in last_signals:
         if time.time() - last_signals[symbol] < COOLDOWN:
             return None
     try:
+        ticker = yf.Ticker(symbol)
+
+        # بيانات 5 دقائق (آخر يومين)
+        df5 = ticker.history(period="2d", interval="5m", auto_adjust=True)
         if df5 is None or df5.empty or len(df5) < 21:
             return None
 
-        price  = df5["Close"].iloc[-1]
-        vol    = df5["Volume"].iloc[-1]
+        # بيانات يومية (فلتر الحجم + Gap)
+        daily = ticker.history(period="5d", interval="1d", auto_adjust=True)
+        if daily is None or daily.empty:
+            return None
 
+        price = float(df5["Close"].iloc[-1])
+        vol   = float(df5["Volume"].iloc[-1])
+
+        # فلاتر أساسية
         if price < MIN_PRICE:
             return None
-        if daily is None or daily.empty or daily["Volume"].mean() < MIN_VOLUME:
+        avg_daily_vol = float(daily["Volume"].mean())
+        if avg_daily_vol < MIN_VOLUME:
             return None
 
+        # مؤشرات
         rsi_s    = calc_rsi(df5["Close"])
-        rsi      = round(rsi_s.iloc[-1], 1)
-        rsi_prev = round(rsi_s.iloc[-2], 1)
-
-        if rsi > MAX_RSI:
+        rsi      = round(float(rsi_s.iloc[-1]), 1)
+        rsi_prev = round(float(rsi_s.iloc[-2]), 1)
+        if rsi > MAX_RSI or rsi != rsi:  # تجاهل NaN
             return None
 
         df5["EMA20"] = df5["Close"].ewm(span=20).mean()
@@ -190,83 +171,75 @@ def check_signal(symbol, df5, daily):
         df5["VWAP"]  = (df5["Close"] * df5["Volume"]).cumsum() / df5["Volume"].cumsum()
 
         prev      = df5.iloc[-21:-1]
-        highest   = prev["High"].max()
-        lowest    = prev["Low"].min()
-        avg_vol   = prev["Volume"].mean()
-
+        highest   = float(prev["High"].max())
+        lowest    = float(prev["Low"].min())
+        avg_vol   = float(prev["Volume"].mean())
         if avg_vol == 0:
             return None
 
         vol_ratio    = round(vol / avg_vol, 1)
-        ema20        = df5["EMA20"].iloc[-1]
-        ema9         = df5["EMA9"].iloc[-1]
-        vwap         = df5["VWAP"].iloc[-1]
-        prev_close   = df5["Close"].iloc[-2]
-        prev_vwap    = df5["VWAP"].iloc[-2]
-        candle_green = df5["Close"].iloc[-1] > df5["Open"].iloc[-1]
+        ema20        = float(df5["EMA20"].iloc[-1])
+        ema9         = float(df5["EMA9"].iloc[-1])
+        vwap         = float(df5["VWAP"].iloc[-1])
+        prev_close   = float(df5["Close"].iloc[-2])
+        prev_vwap    = float(df5["VWAP"].iloc[-2])
+        candle_green = float(df5["Close"].iloc[-1]) > float(df5["Open"].iloc[-1])
 
-        # حساب تغير السعر في آخر 30 دقيقة (6 شمعات)
-        price_30m_ago   = df5["Close"].iloc[-7] if len(df5) >= 7 else df5["Close"].iloc[0]
+        price_30m_ago    = float(df5["Close"].iloc[-7]) if len(df5) >= 7 else float(df5["Close"].iloc[0])
         price_change_pct = round((price - price_30m_ago) / price_30m_ago * 100, 2)
 
-        # ── 1. Breakout 🚀 ──────────────────────────────────
-        if (price > highest and vol_ratio > 1.5 and price > ema20):
+        # 1. Breakout
+        if price > highest and vol_ratio > 1.5 and price > ema20:
             stars = calc_stars(vol_ratio, rsi, price_change_pct, "Breakout")
             last_signals[symbol] = time.time()
-            return {"symbol": symbol, "price": round(price, 2),
-                    "volume_ratio": vol_ratio, "rsi": rsi, "stars": stars,
-                    "price_change": price_change_pct,
-                    "support": round(lowest, 2), "resistance": round(highest, 2),
-                    "strategy": "Breakout 🚀"}
+            return dict(symbol=symbol, price=round(price,2), volume_ratio=vol_ratio,
+                        rsi=rsi, stars=stars, price_change=price_change_pct,
+                        support=round(lowest,2), resistance=round(highest,2),
+                        strategy="Breakout 🚀")
 
-        # ── 2. VWAP Bounce 📊 ───────────────────────────────
-        if (prev_close < prev_vwap and price > vwap and
-                vol_ratio > 1.2 and price > ema9 and rsi > 40):
+        # 2. VWAP Bounce
+        if prev_close < prev_vwap and price > vwap and vol_ratio > 1.2 and price > ema9 and rsi > 40:
             stars = calc_stars(vol_ratio, rsi, price_change_pct, "VWAP")
             last_signals[symbol] = time.time()
-            return {"symbol": symbol, "price": round(price, 2),
-                    "volume_ratio": vol_ratio, "rsi": rsi, "stars": stars,
-                    "price_change": price_change_pct,
-                    "support": round(vwap, 2), "resistance": round(highest, 2),
-                    "strategy": "VWAP Bounce 📊"}
+            return dict(symbol=symbol, price=round(price,2), volume_ratio=vol_ratio,
+                        rsi=rsi, stars=stars, price_change=price_change_pct,
+                        support=round(vwap,2), resistance=round(highest,2),
+                        strategy="VWAP Bounce 📊")
 
-        # ── 3. Gap & Go ⚡ ──────────────────────────────────
+        # 3. Gap & Go
         if len(daily) >= 2:
-            prev_day_close = daily["Close"].iloc[-2]
-            today_open     = daily["Open"].iloc[-1]
+            prev_day_close = float(daily["Close"].iloc[-2])
+            today_open     = float(daily["Open"].iloc[-1])
             gap_pct = (today_open - prev_day_close) / prev_day_close * 100
-            if (gap_pct > 1.5 and price > today_open and vol_ratio > 2.0):
+            if gap_pct > 1.5 and price > today_open and vol_ratio > 2.0:
                 stars = calc_stars(vol_ratio, rsi, gap_pct, "Gap&Go")
                 last_signals[symbol] = time.time()
-                return {"symbol": symbol, "price": round(price, 2),
-                        "volume_ratio": vol_ratio, "rsi": rsi, "stars": stars,
-                        "price_change": round(gap_pct, 2),
-                        "support": round(today_open, 2), "resistance": round(highest, 2),
-                        "strategy": f"Gap & Go ⚡ (+{round(gap_pct,1)}%)"}
+                return dict(symbol=symbol, price=round(price,2), volume_ratio=vol_ratio,
+                            rsi=rsi, stars=stars, price_change=round(gap_pct,2),
+                            support=round(today_open,2), resistance=round(highest,2),
+                            strategy=f"Gap & Go ⚡ (+{round(gap_pct,1)}%)")
 
-        # ── 4. Reversal 🔄 ──────────────────────────────────
-        if (rsi_prev < 45 and rsi > rsi_prev + 1 and
-                price > lowest and vol_ratio > 1.5 and candle_green):
+        # 4. Reversal
+        if rsi_prev < 45 and rsi > rsi_prev + 1 and price > lowest and vol_ratio > 1.5 and candle_green:
             stars = calc_stars(vol_ratio, rsi, price_change_pct, "Reversal")
             last_signals[symbol] = time.time()
-            return {"symbol": symbol, "price": round(price, 2),
-                    "volume_ratio": vol_ratio, "rsi": rsi, "stars": stars,
-                    "price_change": price_change_pct,
-                    "support": round(lowest, 2), "resistance": round(highest, 2),
-                    "strategy": f"Reversal 🔄 (RSI {rsi_prev}→{rsi})"}
+            return dict(symbol=symbol, price=round(price,2), volume_ratio=vol_ratio,
+                        rsi=rsi, stars=stars, price_change=price_change_pct,
+                        support=round(lowest,2), resistance=round(highest,2),
+                        strategy=f"Reversal 🔄 (RSI {rsi_prev}→{rsi})")
 
     except Exception as e:
         print(f"خطأ {symbol}: {e}")
     return None
 
-# ─── بناء الرسالة ─────────────────────────────────────────
+# ─── رسالة ───────────────────────────────────────────────
 
 def build_message(s):
-    target   = round(s["price"] * (1 + TARGET_PCT / 100), 2)
-    stop     = round(s["price"] * (1 - STOP_PCT  / 100), 2)
-    now_et   = datetime.now(ET).strftime("%H:%M ET")
-    stars    = "⭐" * s["stars"]
-    change   = f"+{s['price_change']}%" if s['price_change'] > 0 else f"{s['price_change']}%"
+    target = round(s["price"] * (1 + TARGET_PCT / 100), 2)
+    stop   = round(s["price"] * (1 - STOP_PCT  / 100), 2)
+    now_et = datetime.now(ET).strftime("%H:%M ET")
+    stars  = "⭐" * s["stars"]
+    change = f"+{s['price_change']}%" if s['price_change'] > 0 else f"{s['price_change']}%"
     return (
         f"🚨 {stars} إشارة — {s['strategy']}\n\n"
         f"السهم:      {s['symbol']}\n"
@@ -280,7 +253,7 @@ def build_message(s):
         f"🕐 {now_et}"
     )
 
-# ─── التقييم التلقائي ──────────────────────────────────────
+# ─── تقييم الإشارات المفتوحة ──────────────────────────────
 
 async def evaluate_pending(bot):
     log     = load_log()
@@ -313,7 +286,7 @@ async def evaluate_pending(bot):
             if result is None:
                 if elapsed_min >= TIMEOUT_MINS:
                     result = "timeout"
-                    exit_price = round(df_after["Close"].iloc[-1], 2)
+                    exit_price = round(float(df_after["Close"].iloc[-1]), 2)
                 else:
                     continue
             pnl = round((exit_price - entry_price) / entry_price * 100, 2)
@@ -335,7 +308,7 @@ async def evaluate_pending(bot):
     if updated:
         save_log(log)
 
-# ─── الأوامر ──────────────────────────────────────────────
+# ─── أوامر ───────────────────────────────────────────────
 
 async def start(update, context: ContextTypes.DEFAULT_TYPE):
     status = "✅ السوق مفتوح" if market_is_open() else "🔴 السوق مغلق"
@@ -352,7 +325,7 @@ async def start(update, context: ContextTypes.DEFAULT_TYPE):
         f"• Reversal 🔄\n\n"
         f"قوة الإشارة: ⭐ إلى ⭐⭐⭐\n\n"
         f"{status}\n"
-        f"الفحص: كل 60 ثانية — batch mode (سريع)\n\n"
+        f"الفحص: كل 60 ثانية\n\n"
         f"/scan      — فحص فوري\n"
         f"/pending   — إشارات مفتوحة\n"
         f"/stats     — تحليل الأداء\n"
@@ -371,7 +344,7 @@ async def cmd_status(update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 async def manual_scan(update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(f"🔍 جاري فحص {len(WATCHLIST)} سهم (batch mode)...")
+    await update.message.reply_text(f"🔍 جاري فحص {len(WATCHLIST)} سهم...")
     await scan(context.bot)
     await evaluate_pending(context.bot)
     await update.message.reply_text("✅ انتهى الفحص")
@@ -435,75 +408,28 @@ async def cmd_watchlist(update, context: ContextTypes.DEFAULT_TYPE):
         f"\n\n... و {len(WATCHLIST)-20} سهم آخر"
     )
 
-# ─── الفحص السريع ─────────────────────────────────────────
+# ─── الفحص الرئيسي ───────────────────────────────────────
 
 async def scan(bot):
     now_et = datetime.now(ET).strftime("%H:%M ET")
     print(f"🔍 فحص {len(WATCHLIST)} سهم... {now_et}")
-
     signals_found = 0
-    batch_size    = 25  # دفعات صغيرة أسرع وأموثق
 
-    # ── جلب البيانات اليومية مرة واحدة لكل الأسهم ──
-    try:
-        raw_daily = yf.download(
-            WATCHLIST, period="5d", interval="1d",
-            group_by="ticker", auto_adjust=True,
-            progress=False, threads=True
-        )
-    except:
-        raw_daily = None
-
-    # ── فحص الأسهم دفعة دفعة (5 دقائق فقط) ──
-    for i in range(0, len(WATCHLIST), batch_size):
-        batch = WATCHLIST[i:i+batch_size]
-
+    for symbol in WATCHLIST:
         try:
-            raw = yf.download(
-                batch, period="2d", interval="5m",
-                group_by="ticker", auto_adjust=True,
-                progress=False, threads=True
-            )
-
-            for symbol in batch:
-                try:
-                    # استخراج بيانات 5 دقائق
-                    if len(batch) == 1:
-                        df5 = raw.copy() if raw is not None and not raw.empty else None
-                    else:
-                        try:
-                            df5 = raw.xs(symbol, axis=1, level=1).copy() if raw is not None and not raw.empty else None
-                        except:
-                            df5 = None
-
-                    # استخراج البيانات اليومية
-                    if raw_daily is None or raw_daily.empty:
-                        daily = None
-                    elif len(WATCHLIST) == 1:
-                        daily = raw_daily.copy()
-                    else:
-                        try:
-                            daily = raw_daily.xs(symbol, axis=1, level=1).copy()
-                        except:
-                            daily = None
-
-                    signal = check_signal(symbol, df5, daily)
-                    if signal:
-                        log_signal(signal)
-                        await bot.send_message(chat_id=CHAT_ID, text=build_message(signal))
-                        signals_found += 1
-
-                except Exception as e:
-                    print(f"خطأ {symbol}: {e}")
-
+            signal = check_symbol(symbol)
+            if signal:
+                log_signal(signal)
+                await bot.send_message(chat_id=CHAT_ID, text=build_message(signal))
+                signals_found += 1
+                print(f"✅ إشارة: {signal['symbol']} — {signal['strategy']}")
         except Exception as e:
-            print(f"خطأ batch {i}: {e}")
-
-        await asyncio.sleep(1)
+            print(f"خطأ {symbol}: {e}")
+        await asyncio.sleep(0.5)  # تجنب rate limiting
 
     print(f"✅ انتهى — {signals_found} إشارة")
 
-# ─── الجدولة ──────────────────────────────────────────────
+# ─── الجدولة ─────────────────────────────────────────────
 
 async def run_scheduler(bot):
     while True:
@@ -531,5 +457,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
