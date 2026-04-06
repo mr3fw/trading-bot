@@ -464,13 +464,19 @@ async def scan(bot):
 
             for symbol in batch:
                 try:
-                    # استخراج بيانات السهم
+                    # استخراج بيانات السهم من batch
                     if len(batch) == 1:
-                        df5   = raw
-                        daily = raw_d
+                        df5   = raw.copy()   if raw is not None and not raw.empty else None
+                        daily = raw_d.copy() if raw_d is not None and not raw_d.empty else None
                     else:
-                        df5   = raw[symbol]   if symbol in raw.columns.get_level_values(0)   else None
-                        daily = raw_d[symbol] if symbol in raw_d.columns.get_level_values(0) else None
+                        try:
+                            df5 = raw.xs(symbol, axis=1, level=1).copy() if raw is not None and not raw.empty else None
+                        except:
+                            df5 = None
+                        try:
+                            daily = raw_d.xs(symbol, axis=1, level=1).copy() if raw_d is not None and not raw_d.empty else None
+                        except:
+                            daily = None
 
                     signal = check_signal(symbol, df5, daily)
                     if signal:
@@ -516,3 +522,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
