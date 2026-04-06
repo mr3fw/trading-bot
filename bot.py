@@ -442,39 +442,48 @@ async def scan(bot):
     print(f"🔍 فحص {len(WATCHLIST)} سهم... {now_et}")
 
     signals_found = 0
-    batch_size    = 100  # نجلب 100 سهم دفعة واحدة
+    batch_size    = 25  # دفعات صغيرة أسرع وأموثق
 
+    # ── جلب البيانات اليومية مرة واحدة لكل الأسهم ──
+    try:
+        raw_daily = yf.download(
+            WATCHLIST, period="5d", interval="1d",
+            group_by="ticker", auto_adjust=True,
+            progress=False, threads=True
+        )
+    except:
+        raw_daily = None
+
+    # ── فحص الأسهم دفعة دفعة (5 دقائق فقط) ──
     for i in range(0, len(WATCHLIST), batch_size):
         batch = WATCHLIST[i:i+batch_size]
 
         try:
-            # جلب بيانات 5 دقائق — batch
             raw = yf.download(
-                batch, period="5d", interval="5m",
-                group_by="ticker", auto_adjust=True,
-                progress=False, threads=True
-            )
-
-            # جلب بيانات يومية — batch
-            raw_d = yf.download(
-                batch, period="5d", interval="1d",
+                batch, period="2d", interval="5m",
                 group_by="ticker", auto_adjust=True,
                 progress=False, threads=True
             )
 
             for symbol in batch:
                 try:
-                    # استخراج بيانات السهم من batch
+                    # استخراج بيانات 5 دقائق
                     if len(batch) == 1:
-                        df5   = raw.copy()   if raw is not None and not raw.empty else None
-                        daily = raw_d.copy() if raw_d is not None and not raw_d.empty else None
+                        df5 = raw.copy() if raw is not None and not raw.empty else None
                     else:
                         try:
                             df5 = raw.xs(symbol, axis=1, level=1).copy() if raw is not None and not raw.empty else None
                         except:
                             df5 = None
+
+                    # استخراج البيانات اليومية
+                    if raw_daily is None or raw_daily.empty:
+                        daily = None
+                    elif len(WATCHLIST) == 1:
+                        daily = raw_daily.copy()
+                    else:
                         try:
-                            daily = raw_d.xs(symbol, axis=1, level=1).copy() if raw_d is not None and not raw_d.empty else None
+                            daily = raw_daily.xs(symbol, axis=1, level=1).copy()
                         except:
                             daily = None
 
@@ -490,7 +499,7 @@ async def scan(bot):
         except Exception as e:
             print(f"خطأ batch {i}: {e}")
 
-        await asyncio.sleep(2)  # استراحة بين الدفعات
+        await asyncio.sleep(1)
 
     print(f"✅ انتهى — {signals_found} إشارة")
 
@@ -522,4 +531,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
