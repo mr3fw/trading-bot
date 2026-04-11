@@ -159,16 +159,92 @@ def calc_targets(price, atr_pct):
         round(t1_pct, 2), round(t2_pct, 2), round(stop_pct, 2)
     )
 
-# ─── Stars ───────────────────────────────────────────────
+# ─── Score (0-100) ───────────────────────────────────────
+
+def calc_score(vol_ratio, rsi, chg_pct, atr_pct, strategy):
+    """
+    Score = مجموع نقاط 4 محاور:
+    1. الحجم      (0-30)
+    2. الزخم RSI  (0-25)
+    3. حركة السعر (0-25)
+    4. جودة ATR   (0-20)
+    """
+    score = 0
+    reasons = []
+
+    # 1. الحجم (30 نقطة)
+    if vol_ratio >= 4.0:
+        score += 30; reasons.append(f"حجم {vol_ratio}x 🔥")
+    elif vol_ratio >= 3.0:
+        score += 22; reasons.append(f"حجم {vol_ratio}x")
+    elif vol_ratio >= 2.0:
+        score += 14; reasons.append(f"حجم {vol_ratio}x")
+    else:
+        score += 6
+
+    # 2. RSI (25 نقطة)
+    if strategy in ("Breakout", "Gap&Go", "VWAP"):
+        if 55 <= rsi <= 70:
+            score += 25; reasons.append(f"RSI مثالي {rsi}")
+        elif 50 <= rsi < 55 or 70 < rsi <= 75:
+            score += 15; reasons.append(f"RSI {rsi}")
+        elif 45 <= rsi < 50:
+            score += 8
+    elif strategy == "Reversal":
+        if rsi < 25:
+            score += 25; reasons.append(f"RSI oversold {rsi} 🔥")
+        elif rsi < 30:
+            score += 18; reasons.append(f"RSI {rsi}")
+        else:
+            score += 8
+
+    # 3. حركة السعر (25 نقطة)
+    if strategy == "Gap&Go":
+        if chg_pct >= 5.0:
+            score += 25; reasons.append(f"Gap +{chg_pct}% 🔥")
+        elif chg_pct >= 3.0:
+            score += 18; reasons.append(f"Gap +{chg_pct}%")
+        else:
+            score += 10; reasons.append(f"Gap +{chg_pct}%")
+    elif strategy == "Breakout":
+        if chg_pct >= 2.0:
+            score += 25; reasons.append(f"كسر قوي +{chg_pct}%")
+        elif chg_pct >= 1.0:
+            score += 15; reasons.append(f"كسر +{chg_pct}%")
+        else:
+            score += 8
+    else:
+        if abs(chg_pct) >= 1.5:
+            score += 20; reasons.append(f"حركة {chg_pct}%")
+        elif abs(chg_pct) >= 0.8:
+            score += 12
+        else:
+            score += 5
+
+    # 4. ATR (20 نقطة) — تقلب مناسب
+    if 1.5 <= atr_pct <= 3.5:
+        score += 20; reasons.append("تقلب مثالي")
+    elif 1.0 <= atr_pct < 1.5 or 3.5 < atr_pct <= 5.0:
+        score += 12
+    else:
+        score += 5
+
+    score = min(score, 100)
+
+    # النجوم بناءً على Score
+    if score >= 80:
+        stars = 3
+    elif score >= 60:
+        stars = 2
+    else:
+        stars = 1
+
+    return score, stars, reasons
 
 def calc_stars(vol_ratio, rsi, chg_pct, strategy):
-    stars = 1
-    if vol_ratio >= 3.0: stars += 1
-    if strategy == "Reversal" and rsi < 25: stars += 1
-    elif strategy == "Breakout" and chg_pct > 2.0: stars += 1
-    elif strategy == "Gap&Go" and chg_pct > 3.0: stars += 1
-    elif strategy == "VWAP" and vol_ratio >= 2.0: stars += 1
-    return min(stars, 3)
+    """للتوافق مع الكود القديم فقط"""
+    score, stars, _ = calc_score(vol_ratio, rsi, chg_pct, 1.5, strategy)
+    return stars
 
 # ─── فحص سهم ─────────────────────────────────────────────
 
@@ -221,15 +297,21 @@ def check_symbol(symbol):
 
         def make(name, key):
             last_signals[symbol] = time.time()
+            score, stars, reasons = calc_score(vol_ratio, rsi, chg_pct, atr_pct, key)
+            entry_low  = round(price, 2)
+            entry_high = round(price * 1.003, 2)  # منطقة دخول ±0.3%
+            risk_per_share = round(price - stop, 2)
             return dict(
                 symbol=symbol, price=round(price,2),
                 volume_ratio=vol_ratio, rsi=rsi,
-                stars=calc_stars(vol_ratio, rsi, chg_pct, key),
+                score=score, stars=stars, reasons=reasons,
                 price_change=chg_pct,
                 support=round(lowest,2), resistance=round(highest,2),
                 strategy=name, atr_pct=atr_pct,
                 target1=target1, target2=target2, stop=stop,
                 target1_pct=t1_pct, target2_pct=t2_pct, stop_pct=stop_pct,
+                entry_low=entry_low, entry_high=entry_high,
+                risk_per_share=risk_per_share,
             )
 
         if price > highest and vol_ratio >= 2.0 and price > ema20:
@@ -243,16 +325,22 @@ def check_symbol(symbol):
             gap_pct = (today_open - prev_day_close) / prev_day_close * 100
             if gap_pct > 1.5 and price > today_open and vol_ratio > 2.0:
                 last_signals[symbol] = time.time()
+                score, stars, reasons = calc_score(vol_ratio, rsi, gap_pct, atr_pct, "Gap&Go")
+                entry_low  = round(price, 2)
+                entry_high = round(price * 1.003, 2)
+                risk_per_share = round(price - stop, 2)
                 return dict(
                     symbol=symbol, price=round(price,2),
                     volume_ratio=vol_ratio, rsi=rsi,
-                    stars=calc_stars(vol_ratio, rsi, gap_pct, "Gap&Go"),
+                    score=score, stars=stars, reasons=reasons,
                     price_change=round(gap_pct,2),
                     support=round(today_open,2), resistance=round(highest,2),
                     strategy=f"Gap & Go ⚡ (+{round(gap_pct,1)}%)",
                     atr_pct=atr_pct,
                     target1=target1, target2=target2, stop=stop,
                     target1_pct=t1_pct, target2_pct=t2_pct, stop_pct=stop_pct,
+                    entry_low=entry_low, entry_high=entry_high,
+                    risk_per_share=risk_per_share,
                 )
         if (rsi_prev < 30 and rsi > rsi_prev + 2 and
                 price > lowest and vol_ratio > 1.5 and candle_green):
@@ -265,23 +353,37 @@ def check_symbol(symbol):
 # ─── رسالة ───────────────────────────────────────────────
 
 def build_message(s):
-    now_et = datetime.now(ET).strftime("%H:%M ET")
-    stars  = "⭐" * s["stars"]
-    change = f"+{s['price_change']}%" if s['price_change'] > 0 else f"{s['price_change']}%"
+    now_et  = datetime.now(ET).strftime("%H:%M ET")
+    stars   = "⭐" * s["stars"]
+    score   = s.get("score", 0)
+    reasons = s.get("reasons", [])
+    change  = f"+{s['price_change']}%" if s['price_change'] > 0 else f"{s['price_change']}%"
+
+    # لون Score
+    if score >= 80:
+        score_icon = "🟢"
+    elif score >= 60:
+        score_icon = "🟡"
+    else:
+        score_icon = "🔴"
+
+    reasons_text = " + ".join(reasons) if reasons else "—"
+
     return (
-        f"🚨 {stars} إشارة — {s['strategy']}\n\n"
-        f"السهم:       {s['symbol']}\n"
-        f"السعر:       ${s['price']} ({change})\n"
-        f"RSI:         {s['rsi']}\n"
-        f"الحجم:       {s['volume_ratio']}x المتوسط\n"
-        f"ATR:         {s['atr_pct']}%\n\n"
-        f"📊 دعم:      ${s['support']}\n"
-        f"📊 مقاومة:  ${s['resistance']}\n\n"
-        f"🎯 هدف 1:    ${s['target1']} (+{s['target1_pct']}%) — بيع 33%\n"
-        f"🎯 هدف 2:    ${s['target2']} (+{s['target2_pct']}%) — بيع 33%\n"
-        f"📈 هدف 3:    Trailing Stop يتبع السعر\n"
-        f"🛑 الوقف:    ${s['stop']} (-{s['stop_pct']}%)\n\n"
-        f"🕐 {now_et}\n🌙 سهم شرعي"
+        f"🚨 {stars} إشارة — {s['strategy']} 🌙\n\n"
+        f"السهم:        {s['symbol']}\n"
+        f"Score:        {score_icon} {score}/100\n"
+        f"السعر:        ${s['price']} ({change})\n"
+        f"السبب:        {reasons_text}\n\n"
+        f"📥 منطقة دخول: ${s.get('entry_low', s['price'])} — ${s.get('entry_high', s['price'])}\n"
+        f"🛑 الوقف:      ${s['stop']} (-{s['stop_pct']}%)\n"
+        f"🎯 هدف 1:      ${s['target1']} (+{s['target1_pct']}%) — بيع 33%\n"
+        f"🎯 هدف 2:      ${s['target2']} (+{s['target2_pct']}%) — بيع 33%\n"
+        f"📈 هدف 3:      Trailing Stop\n\n"
+        f"💰 مخاطرة/سهم: ${s.get('risk_per_share', '—')}\n"
+        f"ATR:           {s['atr_pct']}%\n\n"
+        f"🕐 {now_et}\n"
+        f"⚠️ راجع يدوياً قبل الدخول"
     )
 
 # ─── تقييم الإشارات (نظام 3 أهداف + Trailing) ────────────
@@ -616,4 +718,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
