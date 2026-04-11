@@ -13,30 +13,42 @@ nest_asyncio.apply()
 TOKEN   = os.environ.get("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-WATCHLIST = [
-    "AAPL","MSFT","NVDA","AMZN","GOOGL","META","TSLA","AVGO",
-    "JPM","LLY","UNH","XOM","V","MA","COST","HD","PG","ABBV","MRK","CVX","NFLX",
-    "CRM","BAC","KO","PEP","TMO","ACN","MCD","CSCO","ABT","ADBE","WMT","TXN",
-    "PM","NKE","DHR","NEE","ORCL","RTX","HON","AMGN","LOW","UPS","QCOM","IBM",
-    "CAT","GS","INTU","SPGI","BLK","ISRG","MDT","AXP","T","DE","GILD",
-    "NOW","SYK","VRTX","ZTS","BMY","C","MO","CL","DUK","SO","PLD","AMT",
-    "CI","CB","TJX","USB","PNC","REGN","HUM","ITW","CME","ETN","APD",
-    "GD","NSC","FDX","EMR","MCO","PSA","F","GM","SHW","EOG","SLB","OXY",
-    "KLAC","LRCX","AMAT","MCHP","ADI","SNPS","CDNS","PH","ROK","AME",
-    "BIIB","MRNA","DXCM","BSX","EW","RMD",
-    "AMD","INTC","MU","DELL",
-    "UBER","ABNB","COIN","PYPL","SOFI",
-    "NET","SNOW","MDB","TEAM","HUBS","CRWD","DDOG","ZS","OKTA",
-    "DIS","WBD","AMC",
-    "LEN","PHM","DHI",
-    "WFC","MS","SCHW","COF",
-    "COP","MPC","VLO","DVN",
-    "EQIX","SPG",
-    "MMM","GE","BA","LMT",
-    "SBUX","CMG","CAVA",
-    "SNAP","EA","TTWO","RBLX","DKNG",
+# ─── قائمة الأسهم الشرعية ────────────────────────────────
+# مصدر: Zoya + Musaffa (محدثة يدوياً)
+# مستبعد: بنوك، تأمين، كحول، تبغ، قمار، ترفيه محظور
+SHARIAH_WATCHLIST = [
+    # تقنية
+    "AAPL","MSFT","NVDA","AVGO","AMD","INTC","QCOM","TXN",
+    "AMAT","LRCX","KLAC","MCHP","ADI","SNPS","CDNS",
+    "ORCL","CRM","ADBE","NOW","TEAM","NET","DDOG","CRWD",
+    "ZS","OKTA","MDB","SNOW","HUBS","DELL","MU",
+    # تجزئة
+    "AMZN","WMT","COST","HD","LOW","TJX","NKE",
+    "SBUX","MCD","CMG","CAVA",
+    # رعاية صحية
+    "LLY","ABBV","MRK","TMO","ABT","ISRG","BSX","EW",
+    "RMD","DXCM","VRTX","BIIB","MRNA","REGN","AMGN",
+    "GILD","ZTS","SYK","MDT","UNH",
+    # طاقة
+    "XOM","CVX","COP","EOG","SLB","OXY","DVN","MPC","VLO",
+    # صناعات
+    "HON","GE","MMM","EMR","ETN","PH","ROK","AME",
+    "GD","LMT","RTX","BA","CAT","DE","NSC","FDX","UPS",
+    # اتصالات وتقنية
+    "GOOGL","META","TSLA","UBER","ABNB",
+    # مواد أساسية
+    "SHW","APD",
+    # عقارات رقمي
+    "EQIX","AMT","PLD",
+    # طعام (بدون كحول)
+    "PG","KO","PEP","CL",
+    # كهرباء ونظيفة
+    "NEE","DUK","SO",
+    # ترفيه شرعي
+    "EA","TTWO","RBLX",
 ]
-WATCHLIST = list(dict.fromkeys(WATCHLIST))
+
+WATCHLIST = list(dict.fromkeys(SHARIAH_WATCHLIST))
 
 ET           = pytz.timezone("America/New_York")
 COOLDOWN     = 1800
@@ -269,7 +281,7 @@ def build_message(s):
         f"🎯 هدف 2:    ${s['target2']} (+{s['target2_pct']}%) — بيع 33%\n"
         f"📈 هدف 3:    Trailing Stop يتبع السعر\n"
         f"🛑 الوقف:    ${s['stop']} (-{s['stop_pct']}%)\n\n"
-        f"🕐 {now_et}"
+        f"🕐 {now_et}\n🌙 سهم شرعي"
     )
 
 # ─── تقييم الإشارات (نظام 3 أهداف + Trailing) ────────────
@@ -458,7 +470,7 @@ async def evaluate_pending(bot):
 async def start(update, context: ContextTypes.DEFAULT_TYPE):
     status = "✅ السوق مفتوح" if market_is_open() else "🔴 السوق مغلق"
     await update.message.reply_text(
-        f"البوت يعمل ✅\n\n"
+        f"البوت يعمل ✅ — شرعي 🌙\n\n"
         f"يراقب {len(WATCHLIST)} سهم\n\n"
         f"الاستراتيجيات:\n"
         f"• Breakout 🚀  (vol ≥ 2x)\n"
@@ -550,7 +562,7 @@ async def cmd_pending(update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_watchlist(update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        f"📋 قائمة المراقبة\n\n"
+        f"📋 قائمة المراقبة الشرعية 🌙\n\n"
         f"عدد الأسهم: {len(WATCHLIST)}\n\n"
         f"أول 20 سهم:\n" +
         "\n".join(f"• {s}" for s in WATCHLIST[:20]) +
@@ -604,3 +616,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
