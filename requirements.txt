@@ -1,5 +1,4 @@
-python-telegram-bot==20.7
-yfinance==0.2.36
+python-telegram-bot==21.9
+yfinance==0.2.50
 pandas
 nest-asyncio
-pytz
